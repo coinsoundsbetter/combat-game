@@ -1,0 +1,52 @@
+# ============ Unity 本地生成目录（核心：不要上传） ============
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Bb]uild/
+[Bb]uilds/
+[Ll]ogs/
+[Uu]ser[Ss]ettings/
+[Mm]emoryCaptures/
+
+# 保留 Assets 下的 .meta（Unity 靠它跟踪资源），但忽略其它生成文件
+!/[Aa]ssets/**/*.meta
+
+# ============ IDE / 编辑器缓存 ============
+.vs/
+.idea/
+.vscode/
+
+# VS / Rider / MD 自动生成的工程文件（clone 后 Unity 会重新生成）
+ExportedObj/
+.consulo/
+*.csproj
+*.unityproj
+*.sln
+*.suo
+*.tmp
+*.user
+*.userprefs
+*.pidb
+*.booproj
+*.svd
+*.pdb
+*.mdb
+*.opendb
+*.VC.db
+*.csproj.DotSettings
+
+# ============ Unity 生成的 meta 变体 ============
+*.pidb.meta
+*.pdb.meta
+*.mdb.meta
+
+# ============ 崩溃报告 / 构建产物 ============
+sysinfo.txt
+*.apk
+*.aab
+*.unitypackage
+crashlytics-build.properties
+
+# ============ 操作系统 ============
+.DS_Store
+Thumbs.db
