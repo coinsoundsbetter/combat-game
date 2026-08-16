@@ -1,0 +1,41 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: d12045d684691924a95debf6341c430d, type: 3}
+  m_Name: F1
+  m_EditorClassIdentifier: 
+  roleId: F1
+  prefab: {fileID: 114359322480395889, guid: 10fd52659371d764cba376d8e882fbd6, type: 3}
+  maxHealth: 1000
+  walkSpeed: 5.7
+  jumpSpeed: 30
+  jumpStartupFrames: 12
+  gravity: -162
+  maxFallSpeed: -55.2
+  lightAttack:
+    Damage: 40
+    HitstunFrames: 14
+    BlockstunFrames: 8
+    Pushback: 13.2
+  standingHurtBoxSize: {x: 0.64, y: 1.7}
+  jumpTimeline: {fileID: 11400000, guid: a7f1c1d5514be2c4b835a52ac9447e16, type: 2}
+  lightAttackTimeline: {fileID: 11400000, guid: 8e7d4c165efd82f438c2229e56560da8, type: 2}
+  idleMotionData: {fileID: 11400000, guid: 3564e1d3d7bde144a86b928f446dba48, type: 2}
+  walkForwardMotionData: {fileID: 0}
+  walkBackwardMotionData: {fileID: 0}
+  guardMotionData: {fileID: 0}
+  crouchMotionData: {fileID: 0}
+  jumpMotionData: {fileID: 11400000, guid: 2152baa70565ddc419b93208a1b605ad, type: 2}
+  lightAttackMotionData: {fileID: 11400000, guid: 47a23fbc11e702c42bb62105125ed3be, type: 2}
+  heavyAttackMotionData: {fileID: 0}
+  hitstunMotionData: {fileID: 0}
+  blockstunMotionData: {fileID: 0}
+  koMotionData: {fileID: 0}

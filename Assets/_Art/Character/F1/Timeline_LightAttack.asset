@@ -1,0 +1,53 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 6a81ee13020042cb894f2419ba7db79b, type: 3}
+  m_Name: Timeline_LightAttack
+  m_EditorClassIdentifier: 
+  timelineId: LightAttack
+  frameRate: 60
+  totalFrames: 38
+  loop: 0
+  sceneViewAnimation: {fileID: 7400000, guid: 29d31a60896521e41bc4813e3ca86d0a, type: 2}
+  fighterRole: {fileID: 11400000, guid: 566b40b750565c2458c738c1bc11a78b, type: 2}
+  tracks:
+  - rid: 4213427881624731897
+  references:
+    version: 2
+    RefIds:
+    - rid: 4213427881624731897
+      type: {class: MotionTimelineHitBoxTrackDefinition, ns: GLMFighter.Runtime, asm: Assembly-CSharp}
+      data:
+        trackId: hitbox1
+        displayName: "\u8F7B\u62F3"
+        startFrame: 0
+        endFrame: 37
+        center: {x: 0, y: 0}
+        size: {x: 0.7, y: 0.42}
+        active: 1
+        interpolation: 0
+        keys:
+        - Frame: 0
+          Center: {x: 0, y: 0}
+          Size: {x: 0.7, y: 0.42}
+          Active: 0
+        - Frame: 10
+          Center: {x: 0.82, y: 1.44}
+          Size: {x: 0.7, y: 0.42}
+          Active: 1
+        - Frame: 15
+          Center: {x: 0.82, y: 1.44}
+          Size: {x: 0.7, y: 0.42}
+          Active: 0
+        - Frame: 37
+          Center: {x: 0.82, y: 1.44}
+          Size: {x: 0.7, y: 0.42}
+          Active: 0
