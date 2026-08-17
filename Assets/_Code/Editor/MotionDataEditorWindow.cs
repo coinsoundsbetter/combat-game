@@ -29,6 +29,15 @@ namespace GLMFighter.EditorTools
         private Rect timelineFrameArea;
         private float timelineZoom = 1f;
         private float timelineScroll;
+        private bool bodyHandleUndoRecorded;
+
+        private enum BodyHandleEdge
+        {
+            Top,
+            Bottom,
+            Left,
+            Right
+        }
 
         [MenuItem("GLM Fighter/Motion Timeline Editor")]
         public static void Open()
@@ -627,12 +636,24 @@ namespace GLMFighter.EditorTools
                     MessageType.None);
             }
 
+            Vector2 entityOffset = EditorGUILayout.Vector2Field("Entity Offset", state.EntityOffset);
             Vector2 centerOffset = EditorGUILayout.Vector2Field("Body Center Offset", state.BodyCenterOffset);
-            Vector2 sizeOffset = EditorGUILayout.Vector2Field("Body Size Offset", state.BodySizeOffset);
-            if (centerOffset != state.BodyCenterOffset || sizeOffset != state.BodySizeOffset)
+            Vector2 baseSize = GetBodyBaseSize();
+            Vector2 size = EditorGUILayout.Vector2Field(
+                "Body Size",
+                new Vector2(
+                    Mathf.Max(0.01f, baseSize.x + state.BodySizeOffset.x),
+                    Mathf.Max(0.01f, baseSize.y + state.BodySizeOffset.y)));
+            size.x = Mathf.Max(0.01f, size.x);
+            size.y = Mathf.Max(0.01f, size.y);
+            Vector2 sizeOffset = size - baseSize;
+            if (entityOffset != state.EntityOffset ||
+                centerOffset != state.BodyCenterOffset ||
+                sizeOffset != state.BodySizeOffset)
             {
                 Undo.RecordObject(timeline, "Edit Body Track Data");
                 state.Frame = currentFrame;
+                state.EntityOffset = entityOffset;
                 state.BodyCenterOffset = centerOffset;
                 state.BodySizeOffset = sizeOffset;
                 ExpandTrackToFrame(track, currentFrame);
@@ -919,6 +940,17 @@ namespace GLMFighter.EditorTools
                 return;
             }
 
+            Vector2 totalEntityOffset = Vector2.zero;
+            for (int index = 0; index < timeline.Tracks.Length; index++)
+            {
+                MotionTimelineBodyTrackDefinition bodyTrack =
+                    timeline.Tracks[index] as MotionTimelineBodyTrackDefinition;
+                if (bodyTrack != null && bodyTrack.ContainsFrame(currentFrame))
+                {
+                    totalEntityOffset += bodyTrack.Evaluate(currentFrame).EntityOffset;
+                }
+            }
+
             Matrix4x4 matrix = previewRoot == null ? Matrix4x4.identity : previewRoot.transform.localToWorldMatrix;
             using (new Handles.DrawingScope(matrix))
             {
@@ -945,11 +977,19 @@ namespace GLMFighter.EditorTools
                     Vector2 bodySize = new Vector2(
                         Mathf.Max(0.01f, baseSize.x + totalBodySizeOffset.x),
                         Mathf.Max(0.01f, baseSize.y + totalBodySizeOffset.y));
-                    Vector2 bodyCenter = totalBodyCenterOffset + new Vector2(0f, baseSize.y * 0.5f);
+                    Vector2 bodyCenter = totalEntityOffset +
+                                         totalBodyCenterOffset +
+                                         new Vector2(0f, baseSize.y * 0.5f);
                     Handles.color = new Color(0.35f, 0.95f, 0.45f, 0.8f);
                     Handles.DrawWireCube(
                         new Vector3(bodyCenter.x, bodyCenter.y, 0f),
                         new Vector3(bodySize.x, bodySize.y, 0.04f));
+
+                    MotionTimelineBodyTrackDefinition editableBodyTrack = GetEditableBodyTrack();
+                    if (editableBodyTrack != null)
+                    {
+                        DrawBodyBoxHandles(editableBodyTrack, baseSize);
+                    }
                 }
 
                 for (int index = 0; index < timeline.Tracks.Length; index++)
@@ -977,6 +1017,159 @@ namespace GLMFighter.EditorTools
                         new Vector3(hitBoxState.Size.x, hitBoxState.Size.y, 0.04f));
                 }
             }
+        }
+
+        private MotionTimelineBodyTrackDefinition GetEditableBodyTrack()
+        {
+            if (timeline == null)
+            {
+                return null;
+            }
+
+            if (selectedTrack >= 0 && selectedTrack < timeline.Tracks.Length)
+            {
+                MotionTimelineBodyTrackDefinition selectedBodyTrack =
+                    timeline.Tracks[selectedTrack] as MotionTimelineBodyTrackDefinition;
+                if (selectedBodyTrack != null)
+                {
+                    return selectedBodyTrack;
+                }
+            }
+
+            for (int index = 0; index < timeline.Tracks.Length; index++)
+            {
+                MotionTimelineBodyTrackDefinition bodyTrack =
+                    timeline.Tracks[index] as MotionTimelineBodyTrackDefinition;
+                if (bodyTrack != null)
+                {
+                    return bodyTrack;
+                }
+            }
+
+            return null;
+        }
+
+        private Vector2 GetBodyBaseSize()
+        {
+            return fighterRole == null
+                ? Vector2.one
+                : fighterRole.StandingHurtBoxSize;
+        }
+
+        private void DrawBodyBoxHandles(MotionTimelineBodyTrackDefinition track, Vector2 baseSize)
+        {
+            MotionTimelineBodyKey state = track.Evaluate(currentFrame);
+            Vector2 center = state.EntityOffset +
+                             new Vector2(0f, baseSize.y * 0.5f) +
+                             state.BodyCenterOffset;
+            Vector2 size = new Vector2(
+                Mathf.Max(0.01f, baseSize.x + state.BodySizeOffset.x),
+                Mathf.Max(0.01f, baseSize.y + state.BodySizeOffset.y));
+            Vector2 halfSize = size * 0.5f;
+            float handleSize = HandleUtility.GetHandleSize(new Vector3(center.x, center.y, 0f)) * 0.08f;
+            float topY = center.y + halfSize.y;
+            float bottomY = center.y - halfSize.y;
+            float leftX = center.x - halfSize.x;
+            float rightX = center.x + halfSize.x;
+
+            Handles.color = new Color(0.35f, 0.95f, 0.45f, 1f);
+            Vector3 top = Handles.Slider(
+                new Vector3(center.x, topY, 0f),
+                Vector3.up,
+                handleSize,
+                Handles.DotHandleCap,
+                0f);
+            Vector3 bottom = Handles.Slider(
+                new Vector3(center.x, bottomY, 0f),
+                Vector3.up,
+                handleSize,
+                Handles.DotHandleCap,
+                0f);
+            Vector3 left = Handles.Slider(
+                new Vector3(leftX, center.y, 0f),
+                Vector3.right,
+                handleSize,
+                Handles.DotHandleCap,
+                0f);
+            Vector3 right = Handles.Slider(
+                new Vector3(rightX, center.y, 0f),
+                Vector3.right,
+                handleSize,
+                Handles.DotHandleCap,
+                0f);
+
+            const float dragEpsilon = 0.0001f;
+            if (Mathf.Abs(top.y - topY) > dragEpsilon)
+            {
+                ApplyBodyHandleEdit(track, baseSize, center, size, BodyHandleEdge.Top, top.y);
+            }
+            else if (Mathf.Abs(bottom.y - bottomY) > dragEpsilon)
+            {
+                ApplyBodyHandleEdit(track, baseSize, center, size, BodyHandleEdge.Bottom, bottom.y);
+            }
+            else if (Mathf.Abs(left.x - leftX) > dragEpsilon)
+            {
+                ApplyBodyHandleEdit(track, baseSize, center, size, BodyHandleEdge.Left, left.x);
+            }
+            else if (Mathf.Abs(right.x - rightX) > dragEpsilon)
+            {
+                ApplyBodyHandleEdit(track, baseSize, center, size, BodyHandleEdge.Right, right.x);
+            }
+
+            Event evt = Event.current;
+            if (evt.type == EventType.MouseUp)
+            {
+                bodyHandleUndoRecorded = false;
+            }
+        }
+
+        private void ApplyBodyHandleEdit(
+            MotionTimelineBodyTrackDefinition track,
+            Vector2 baseSize,
+            Vector2 center,
+            Vector2 size,
+            BodyHandleEdge edge,
+            float handlePosition)
+        {
+            const float minimumSize = 0.01f;
+            float left = center.x - size.x * 0.5f;
+            float right = center.x + size.x * 0.5f;
+            float bottom = center.y - size.y * 0.5f;
+            float top = center.y + size.y * 0.5f;
+
+            switch (edge)
+            {
+                case BodyHandleEdge.Top:
+                    top = Mathf.Max(bottom + minimumSize, handlePosition);
+                    break;
+                case BodyHandleEdge.Bottom:
+                    bottom = Mathf.Min(top - minimumSize, handlePosition);
+                    break;
+                case BodyHandleEdge.Left:
+                    left = Mathf.Min(right - minimumSize, handlePosition);
+                    break;
+                case BodyHandleEdge.Right:
+                    right = Mathf.Max(left + minimumSize, handlePosition);
+                    break;
+            }
+
+            Vector2 nextSize = new Vector2(right - left, top - bottom);
+            Vector2 nextCenter = new Vector2((left + right) * 0.5f, (bottom + top) * 0.5f);
+            MotionTimelineBodyKey next = track.Evaluate(currentFrame);
+            next.Frame = currentFrame;
+            next.BodyCenterOffset = nextCenter - new Vector2(0f, baseSize.y * 0.5f);
+            next.BodySizeOffset = nextSize - baseSize;
+
+            if (!bodyHandleUndoRecorded)
+            {
+                Undo.RecordObject(timeline, "Resize Body Box");
+                bodyHandleUndoRecorded = true;
+            }
+
+            ExpandTrackToFrame(track, currentFrame);
+            track.SetKey(next);
+            MarkDirty();
+            SceneView.RepaintAll();
         }
 
         private void OnEditorUpdate()

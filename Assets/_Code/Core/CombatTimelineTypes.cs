@@ -66,6 +66,7 @@ namespace GLMFighter.Core
     {
         public CombatFrameFlags Flags;
         public SimVector2 EntityOffset;
+        public SimVector2 BoundsCenterOffset;
         public int BoundsHalfSizeOffsetX;
         public int BoundsHalfSizeOffsetY;
         public CombatBox[] Boxes;

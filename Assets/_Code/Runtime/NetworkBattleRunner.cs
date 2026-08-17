@@ -26,6 +26,7 @@ namespace GLMFighter.Runtime
         [SerializeField] private bool drawLogicWorldDebugHud = true;
         [SerializeField] private bool logLogicWorldDebug;
         [SerializeField] private int logicWorldDebugLogIntervalFrames = 30;
+        [SerializeField] private bool jumpDebug;
 
         [Header("Roles")]
         [SerializeField] private FighterRoleDefinition[] fighterRoles;
@@ -122,6 +123,13 @@ namespace GLMFighter.Runtime
             builder.AppendLine();
             AppendFighterDebug(builder, "P1", _simulation.PlayerOne);
             AppendFighterDebug(builder, "P2", _simulation.PlayerTwo);
+
+            if (jumpDebug)
+            {
+                AppendJumpDebug(builder, "P1", _simulation.PlayerOne);
+                AppendJumpDebug(builder, "P2", _simulation.PlayerTwo);
+            }
+
             return builder.ToString();
         }
 
@@ -383,6 +391,47 @@ namespace GLMFighter.Runtime
             builder.AppendLine();
             builder.Append("  Hit ");
             AppendRects(builder, hasHitboxes ? hitboxes : new SimRect[0]);
+            builder.AppendLine();
+        }
+
+        private void AppendJumpDebug(StringBuilder builder, string label, FighterState state)
+        {
+            CombatMoveData jumpMove = state.RoleStats.JumpMove;
+            int currentFrameY = 0;
+            int nextFrame = 0;
+            int nextFrameY = 0;
+
+            if (jumpMove.HasFrames)
+            {
+                currentFrameY = jumpMove.GetFrame(state.MotionFrame).EntityOffset.Y;
+                nextFrame = jumpMove.GetFrameForSimulationTick(state.MotionTicks + 1);
+                nextFrameY = jumpMove.GetFrame(nextFrame).EntityOffset.Y;
+            }
+
+            SimVector2 entityCenter = _simulation.GetEntityCenter(state);
+            builder.Append(label);
+            builder.Append(" JumpDebug phase=");
+            builder.Append(state.Phase);
+            builder.Append(" phaseFrame=");
+            builder.Append(state.PhaseFrame);
+            builder.Append(" motionFrame=");
+            builder.Append(state.MotionFrame);
+            builder.Append(" motionTick=");
+            builder.Append(state.MotionTicks);
+            builder.Append(" logicY=");
+            builder.Append(SimMath.ToUnity(state.Position.Y).ToString("0.###"));
+            builder.Append(" entityY=");
+            builder.Append(SimMath.ToUnity(entityCenter.Y).ToString("0.###"));
+            builder.Append(" timelineY=");
+            builder.Append(SimMath.ToUnity(currentFrameY).ToString("0.###"));
+            builder.Append(" nextFrame=");
+            builder.Append(nextFrame);
+            builder.Append(" nextTimelineY=");
+            builder.Append(SimMath.ToUnity(nextFrameY).ToString("0.###"));
+            builder.Append(" velocityY=");
+            builder.Append(SimMath.ToUnity(state.Velocity.Y).ToString("0.###"));
+            builder.Append(" onGround=");
+            builder.Append(state.OnGround);
             builder.AppendLine();
         }
 

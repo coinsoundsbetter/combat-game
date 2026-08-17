@@ -110,6 +110,7 @@ namespace GLMFighter.Runtime
             CombatStateRange[] stateRanges = BuildStates();
             for (int frameIndex = 0; frameIndex < runtimeFrames.Length; frameIndex++)
             {
+                Vector2 entityOffset = Vector2.zero;
                 Vector2 bodyCenterOffset = Vector2.zero;
                 Vector2 bodySizeOffset = Vector2.zero;
 
@@ -123,6 +124,7 @@ namespace GLMFighter.Runtime
                     }
 
                     MotionTimelineBodyKey bodyState = bodyTrack.Evaluate(frameIndex);
+                    entityOffset += bodyState.EntityOffset;
                     bodyCenterOffset += bodyState.BodyCenterOffset;
                     bodySizeOffset += bodyState.BodySizeOffset;
                 }
@@ -131,6 +133,9 @@ namespace GLMFighter.Runtime
                 {
                     Flags = CombatFrameFlags.None,
                     EntityOffset = new SimVector2(
+                        SimMath.FromUnity(entityOffset.x),
+                        SimMath.FromUnity(entityOffset.y)),
+                    BoundsCenterOffset = new SimVector2(
                         SimMath.FromUnity(bodyCenterOffset.x),
                         SimMath.FromUnity(bodyCenterOffset.y)),
                     BoundsHalfSizeOffsetX = SimMath.FromUnity(bodySizeOffset.x * 0.5f),
@@ -372,12 +377,14 @@ namespace GLMFighter.Runtime
     [System.Serializable]
     public sealed class MotionTimelineBodyTrackDefinition : MotionTimelineTrackDefinition
     {
+        [SerializeField] private Vector2 entityOffset;
         [SerializeField] private Vector2 bodyCenterOffset;
         [SerializeField] private Vector2 bodySizeOffset;
         [SerializeField] private MotionTimelineInterpolationMode interpolation;
         [SerializeField] private MotionTimelineBodyKey[] keys = new MotionTimelineBodyKey[0];
 
         public override MotionTimelineTrackType Type => MotionTimelineTrackType.Body;
+        public Vector2 EntityOffset { get { return entityOffset; } set { entityOffset = value; } }
         public Vector2 BodyCenterOffset { get { return bodyCenterOffset; } set { bodyCenterOffset = value; } }
         public Vector2 BodySizeOffset { get { return bodySizeOffset; } set { bodySizeOffset = value; } }
         public MotionTimelineInterpolationMode Interpolation { get { return interpolation; } set { interpolation = value; } }
@@ -392,6 +399,7 @@ namespace GLMFighter.Runtime
             MotionTimelineBodyKey result = new MotionTimelineBodyKey
             {
                 Frame = frame,
+                EntityOffset = entityOffset,
                 BodyCenterOffset = bodyCenterOffset,
                 BodySizeOffset = bodySizeOffset
             };
@@ -425,6 +433,7 @@ namespace GLMFighter.Runtime
                 result = new MotionTimelineBodyKey
                 {
                     Frame = frame,
+                    EntityOffset = Vector2.Lerp(result.EntityOffset, nextKey.EntityOffset, t),
                     BodyCenterOffset = Vector2.Lerp(result.BodyCenterOffset, nextKey.BodyCenterOffset, t),
                     BodySizeOffset = Vector2.Lerp(result.BodySizeOffset, nextKey.BodySizeOffset, t)
                 };
@@ -502,6 +511,7 @@ namespace GLMFighter.Runtime
     public struct MotionTimelineBodyKey
     {
         public int Frame;
+        public Vector2 EntityOffset;
         public Vector2 BodyCenterOffset;
         public Vector2 BodySizeOffset;
     }

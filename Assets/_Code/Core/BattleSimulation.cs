@@ -373,7 +373,7 @@ namespace GLMFighter.Core
             {
                 return GroundY;
             }
-
+            
             return moveData.GetFrame(motionFrame).EntityOffset.Y;
         }
 
@@ -713,7 +713,7 @@ namespace GLMFighter.Core
             }
 
             SimVector2 entityCenter = GetEntityCenter(fighter, frame);
-            SimVector2 localCenter = baseCenter;
+            SimVector2 localCenter = baseCenter + frame.BoundsCenterOffset;
             int halfWidth = Math.Max(1, baseHalfWidth + frame.BoundsHalfSizeOffsetX);
             int halfHeight = Math.Max(1, baseHalfHeight + frame.BoundsHalfSizeOffsetY);
 
@@ -944,6 +944,8 @@ namespace GLMFighter.Core
             AppendChecksum(ref hash, (int)frame.Flags);
             AppendChecksum(ref hash, frame.EntityOffset.X);
             AppendChecksum(ref hash, frame.EntityOffset.Y);
+            AppendChecksum(ref hash, frame.BoundsCenterOffset.X);
+            AppendChecksum(ref hash, frame.BoundsCenterOffset.Y);
             AppendChecksum(ref hash, frame.BoundsHalfSizeOffsetX);
             AppendChecksum(ref hash, frame.BoundsHalfSizeOffsetY);
             AppendChecksum(ref hash, boxCount);
@@ -967,5 +969,4 @@ namespace GLMFighter.Core
 
     }
 }
-
 

@@ -13,18 +13,6 @@ namespace GLMFighter.EditorTools
     /// </summary>
     public static class MotionDataCooker
     {
-        [MenuItem("GLM Fighter/Motion Data/Cook Selected Authoring Asset")]
-        private static void CookSelected()
-        {
-            Cook(Selection.activeObject as MotionDataAuthoringDefinition);
-        }
-
-        [MenuItem("GLM Fighter/Motion Data/Cook Selected Authoring Asset", true)]
-        private static bool ValidateCookSelected()
-        {
-            return Selection.activeObject is MotionDataAuthoringDefinition;
-        }
-
         public static MotionDataDefinition Cook(MotionDataAuthoringDefinition source)
         {
             if (source == null)

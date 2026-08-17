@@ -173,6 +173,7 @@ MonoBehaviour:
   drawLogicWorldDebugHud: 1
   logLogicWorldDebug: 0
   logicWorldDebugLogIntervalFrames: 30
+  jumpDebug: 1
   fighterRoles:
   - {fileID: 11400000, guid: 566b40b750565c2458c738c1bc11a78b, type: 2}
   fighterPrefab: {fileID: 114359322480395889, guid: 10fd52659371d764cba376d8e882fbd6, type: 3}

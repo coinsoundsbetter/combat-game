@@ -19,49 +19,11 @@ MonoBehaviour:
   sceneViewAnimation: {fileID: 7400000, guid: 77e6a847ea63571408fde0c7bde6a900, type: 2}
   fighterRole: {fileID: 11400000, guid: 566b40b750565c2458c738c1bc11a78b, type: 2}
   tracks:
-  - rid: 4213427881624731891
   - rid: 4213427881624731899
+  - rid: 4213427913114779709
   references:
     version: 2
     RefIds:
-    - rid: 4213427881624731891
-      type: {class: MotionTimelineBodyTrackDefinition, ns: GLMFighter.Runtime, asm: Assembly-CSharp}
-      data:
-        trackId: body1
-        displayName: Body1
-        startFrame: 0
-        endFrame: 79
-        bodyCenterOffset: {x: 0, y: -0.21}
-        bodySizeOffset: {x: 0, y: -0.4}
-        interpolation: 1
-        keys:
-        - Frame: 0
-          BodyCenterOffset: {x: 0, y: 0}
-          BodySizeOffset: {x: 0, y: 0}
-        - Frame: 1
-          BodyCenterOffset: {x: 0, y: -0.05}
-          BodySizeOffset: {x: 0, y: -0.19333333}
-        - Frame: 3
-          BodyCenterOffset: {x: 0, y: -0.27}
-          BodySizeOffset: {x: 0, y: -0.58}
-        - Frame: 12
-          BodyCenterOffset: {x: 0, y: -0.06}
-          BodySizeOffset: {x: 0, y: -0.15}
-        - Frame: 23
-          BodyCenterOffset: {x: 0, y: 1.01}
-          BodySizeOffset: {x: 0, y: 0.21}
-        - Frame: 28
-          BodyCenterOffset: {x: 0, y: 1.16}
-          BodySizeOffset: {x: 0, y: 0.19125}
-        - Frame: 48
-          BodyCenterOffset: {x: 0, y: 0.28}
-          BodySizeOffset: {x: 0, y: 0.11624999}
-        - Frame: 52
-          BodyCenterOffset: {x: 0, y: 0}
-          BodySizeOffset: {x: 0, y: 0}
-        - Frame: 79
-          BodyCenterOffset: {x: 0, y: 0}
-          BodySizeOffset: {x: 0, y: 0}
     - rid: 4213427881624731899
       type: {class: MotionTimelineStateTrackDefinition, ns: GLMFighter.Runtime, asm: Assembly-CSharp}
       data:
@@ -78,3 +40,63 @@ MonoBehaviour:
         - Frame: 17
           StateId: PreJumpState
           Value: 0
+    - rid: 4213427913114779709
+      type: {class: MotionTimelineBodyTrackDefinition, ns: GLMFighter.Runtime, asm: Assembly-CSharp}
+      data:
+        trackId: body1
+        displayName: Body1
+        startFrame: 0
+        endFrame: 79
+        entityOffset: {x: 0, y: 0}
+        bodyCenterOffset: {x: 0, y: 0}
+        bodySizeOffset: {x: 0, y: 0}
+        interpolation: 1
+        keys:
+        - Frame: 0
+          EntityOffset: {x: 0, y: 0}
+          BodyCenterOffset: {x: 0, y: 0}
+          BodySizeOffset: {x: 0, y: 0}
+        - Frame: 2
+          EntityOffset: {x: 0, y: 0}
+          BodyCenterOffset: {x: 0, y: -0.26122445}
+          BodySizeOffset: {x: 0, y: -0.5224489}
+        - Frame: 16
+          EntityOffset: {x: 0, y: 0}
+          BodyCenterOffset: {x: 0, y: 0.13714284}
+          BodySizeOffset: {x: 0, y: 0.27428567}
+        - Frame: 19
+          EntityOffset: {x: 0, y: 0.54}
+          BodyCenterOffset: {x: 0, y: 0.13714284}
+          BodySizeOffset: {x: 0, y: 0.27428567}
+        - Frame: 25
+          EntityOffset: {x: 0, y: 0.98}
+          BodyCenterOffset: {x: 0, y: 0.13714284}
+          BodySizeOffset: {x: 0, y: 0.27428567}
+        - Frame: 43
+          EntityOffset: {x: 0, y: 0.78}
+          BodyCenterOffset: {x: 0, y: 0.13714284}
+          BodySizeOffset: {x: 0, y: 0.27428567}
+        - Frame: 49
+          EntityOffset: {x: 0, y: 0}
+          BodyCenterOffset: {x: 0, y: 0.13714284}
+          BodySizeOffset: {x: 0, y: 0.089999914}
+        - Frame: 50
+          EntityOffset: {x: 0, y: 0}
+          BodyCenterOffset: {x: 0, y: 0.072163254}
+          BodySizeOffset: {x: 0, y: 0}
+        - Frame: 51
+          EntityOffset: {x: 0, y: 0}
+          BodyCenterOffset: {x: 0, y: 0.007183669}
+          BodySizeOffset: {x: 0, y: 0}
+        - Frame: 53
+          EntityOffset: {x: 0, y: 0}
+          BodyCenterOffset: {x: 0, y: -0.122775495}
+          BodySizeOffset: {x: 0, y: -0.4052652}
+        - Frame: 66
+          EntityOffset: {x: 0, y: 0}
+          BodyCenterOffset: {x: 0, y: -0.009142876}
+          BodySizeOffset: {x: 0, y: -0.09814286}
+        - Frame: 79
+          EntityOffset: {x: 0, y: 0}
+          BodyCenterOffset: {x: 0, y: 0}
+          BodySizeOffset: {x: 0, y: 0}
