@@ -60,13 +60,13 @@ Assets/_Code/Runtime/
 - BattleSceneBootstrap.cs
 - BattlePresentationController.cs
 - FighterRoleDefinition.cs
-- MotionDataDefinition.cs
+- MotionTimelineAsset.cs
 - FighterView.cs
 - FighterAvatar.cs
 - FighterAnimationDriver.cs
 
 Assets/_Code/Editor/
-- MotionDataEditorWindow.cs
+- MotionDataEditorWindow.cs       Motion Timeline editor window
 
 Assets/_Code/Plugins/
 - LiteNetLib.dll
@@ -128,7 +128,7 @@ Fighter role stats
 Fighter position
 Facing
 Movement
-Jumping with Jump MotionData EntityOffset frames
+Jumping with Motion Timeline EntityOffset frames
 Guard
 Light attacks
 Startup / active / recovery
@@ -136,7 +136,7 @@ Hitstun
 Blockstun
 Pushback
 KO
-MotionData-driven EntityOffset, HitBox, and body queries
+Motion Timeline-driven EntityOffset, HitBox, and body queries
 Base HurtBox queries from FighterRoleDefinition
 Checksum
 Snapshot / restore
@@ -146,14 +146,14 @@ The simulation currently does not use Unity physics. Combat collision is integer
 For a role with a cooked `JumpMove`, the jump arc is authored by the move's
 per-frame `EntityOffset.Y`. The current move frame resolves the entity center;
 hurtboxes, pushboxes, hitboxes, and presentation all follow that same center.
-Every playable role must provide jump frames; missing jump MotionData is a
+Every playable role must provide jump frames; missing Jump Motion Timeline is a
 configuration error rather than a gravity-based fallback.
 
 Core is authoritative for movement and combat:
 
 ```text
 Position
-Entity center from the current MotionData frame
+Entity center from the current Motion Timeline frame
 Velocity
 Jump phase
 Attack phase
@@ -176,9 +176,9 @@ Base HurtBox height
 
 The default HurtBox is centered above the LogicPosition: its horizontal center is zero and its vertical center is half of the configured height. A Body Track can author a per-frame Bounds size offset relative to that role's original Bounds, while `EntityOffset` moves the complete entity frame.
 
-Core combat box queries read HitBoxes from `MotionDataDefinition` and use the `FighterRoleDefinition` standing HurtBox size only for the default HurtBox. Runtime never synthesizes gameplay boxes from prefab colliders, renderer bounds, or Animator poses.
+Core combat box queries read HitBoxes from `MotionTimelineAsset` and use the `FighterRoleDefinition` standing HurtBox size only for the default HurtBox. Runtime never synthesizes gameplay boxes from prefab colliders, renderer bounds, or Animator poses.
 
-`MotionDataDefinition` can author the body frame per frame:
+`MotionTimelineAsset` can author the body frame per frame:
 
 ```text
 EntityOffset = per-frame LogicEntity movement
@@ -192,10 +192,10 @@ equal to the current frame, and it remains active until the next Body Key.
 When `Lerp` is enabled, the state transitions linearly between those two Keys.
 When `Active` is disabled, the Body Track contributes no per-frame state.
 
-MotionData is edited directly on `MotionDataDefinition`. The same asset stores deterministic runtime frame data plus editor-only preview/source fields behind `UNITY_EDITOR`.
+Motion Timeline data is edited directly on `MotionTimelineAsset`. The asset stores authoring tracks and expands them into match-local deterministic data; it is not a prefab or Animator data source.
 
 `BattleRoleCatalog` / `FighterRoleDefinition` bake the deterministic parts of
-`MotionDataDefinition` into `CombatMoveData` before a match starts. Core then
+`MotionTimelineAsset` into `CombatMoveData` before a match starts. Core then
 reads only the baked entity offset, Bounds size offset, frame flags, and HitBox
 rectangles. It must not read prefab Transforms or Animator skeleton pose at
 runtime.
@@ -204,19 +204,15 @@ runtime.
 
 `Runtime/FighterRoleDefinition.cs` is the Unity asset used to configure a playable role / character.
 
-Each role definition contains:
+Each role definition currently contains:
 
 ```text
 Role id
 Prefab
 Max health
 Walk speed
-Jump speed
-Jump startup frames
-Gravity
-Max fall speed
-MotionData references for each motion state
-Light attack hit effect data
+Jump MotionTimeline reference
+Light Attack MotionTimeline reference
 ```
 
 Character-owned combat numbers belong here, not in generic motion data:
@@ -255,9 +251,9 @@ The same player slot can use different role data depending on character selectio
 
 `BattleSimulation.Reset(playerOneRoleStats, playerTwoRoleStats)` initializes each slot with the selected role data.
 
-## Motion Data
+## Motion Timeline
 
-`Runtime/MotionDataDefinition.cs` is the Unity asset format for move-frame data. `Core/CombatTimelineTypes.cs` defines the compact in-memory logic types used by deterministic simulation; it is not an authoring asset.
+`Runtime/MotionTimelineAsset.cs` is the Unity asset format for move-frame data. `Core/CombatTimelineTypes.cs` defines the compact in-memory logic types used by deterministic simulation; it is not an authoring asset.
 
 Core-side move data is organized as:
 
@@ -275,23 +271,21 @@ CombatMoveData
     └── CombatBox[]   // Hit / Hurt / Push / etc.
 ```
 
-`MotionDataDefinition` stores a motion duration and its authoring tracks:
+`MotionTimelineAsset` stores a motion duration and its authoring tracks:
 
 ```text
 TotalFrames
 FrameRate
 Loop
 MotionTrackDefinition[]    // timeline tracks
-  MotionHitBoxTrackDefinition  // a single HitBox lane containing MotionHitBoxKey[] clips
-    MotionHitBoxKey             // label, start/end frame, center, size, group
-  MotionBodyTrackDefinition    // a single Body lane containing MotionBodyKey[] clips
-    Active                      // whether this Body Track participates in logic
-    Lerp                        // whether adjacent Body Keys are interpolated
-    MotionBodyKey               // entity offset and Bounds size offset
-  MotionEffectTrackDefinition  // effect event/range track
+  MotionTimelineHitBoxTrackDefinition  // HitBox lane
+    MotionTimelineHitBoxKey             // frame, center, size, active
+  MotionTimelineBodyTrackDefinition    // Body lane
+    MotionTimelineBodyKey               // entity/body offsets
+  MotionTimelineStateTrackDefinition   // named state ranges, e.g. JumpStartup
 ```
 
-At match setup, `MotionDataDefinition.BuildRuntimeMoveData()` expands the tracks into match-local deterministic `CombatMoveData` and `CombatFrameData[]`. These expanded arrays are not serialized back onto the asset and are not rollback state. Other track types can be added without adding another top-level field to `MotionDataDefinition`; each type gets its own authoring payload and runtime conversion step.
+At match setup, `MotionTimelineAsset.BuildRuntimeMoveData()` expands the tracks into match-local deterministic `CombatMoveData` and `CombatFrameData[]`. These expanded arrays are not serialized back onto the asset and are not rollback state.
 
 The generated runtime move data describes what happens on each logic frame:
 
@@ -337,7 +331,7 @@ The default HurtBox is not duplicated into every move asset. Core creates the st
 
 Motion data should not own role-specific damage, hitstun, blockstun, pushback values, or character tuning numbers. Those remain on `FighterRoleDefinition`.
 
-Current role MotionData slots:
+Current role Motion Timeline slots:
 
 ```text
 Idle
@@ -353,33 +347,32 @@ Blockstun
 KO
 ```
 
-`JumpStartup`, `Jump`, `Fall`, and `Landing` share the same Jump MotionData. This lets the Jump animation include startup / anticipation and landing frames. Core still controls velocity and position; physical ground contact moves the fighter into Landing until the authored Jump motion duration completes.
+`JumpStartup`, `Jump`, `Fall`, and `Landing` share the same Jump Motion Timeline. This lets the Jump animation include startup / anticipation and landing frames. Core still controls velocity and position; physical ground contact moves the fighter into Landing until the authored Jump motion duration completes.
 
 `LightAttack` uses `CombatMoveData.TotalFrames`, per-frame `CombatFrameFlags.Active`, and per-frame `Hit` boxes for logic simulation. Light attack damage, hitstun, blockstun, and pushback remain on `FighterRoleDefinition`.
 
-`Editor/MotionDataEditorWindow.cs` is the direct MotionData timeline editor. It edits Track keys, uses the role SO and an animation clip only as temporary SceneView context, and does not store either reference on MotionData.
+`Editor/MotionDataEditorWindow.cs` is the direct Motion Timeline editor. It edits Track keys, uses the role SO and an animation clip only as temporary SceneView context, and does not store either reference as gameplay truth.
 
 The editor tool is allowed to read Unity animation clips and scene preview data. Runtime Core builds and consumes deterministic runtime move data from the saved Track configuration.
 
-Animation clips are editor-time sampling references only. Root-motion curves are not copied into MotionData and are not applied by Core; deterministic movement comes from Core input and physics rules. If a clip contains root motion, it must be ignored for gameplay movement.
+Animation clips are editor-time sampling references only. Root-motion curves are not copied into Motion Timeline data and are not applied by Core; deterministic movement comes from Core input and timeline rules. If a clip contains root motion, it must be ignored for gameplay movement.
 
 Current F1 data setup:
 
 ```text
-F1_Property
-├── Idle_MotionData
-├── Jump_MotionData
-└── LightAttack_MotionData
+F1
+├── Timeline_Jump
+└── Timeline_LightAttack
 ```
 
-The remaining F1 motion slots are intentionally unassigned until their MotionData assets are authored. MotionData assets store their own preview HurtBox size for editor visualization.
+The remaining move slots are intentionally empty in the current prototype. The F1 role currently consumes only the Jump and LightAttack Motion Timeline references.
 
 The removed legacy path must not be reintroduced:
 
 ```text
 No CombatTimelineDefinition Unity asset
 No legacy Timeline cooker/editor
-No separate ManualMotionDataDefinition authoring asset
+No separate MotionDataDefinition authoring/cooked chain
 No separate CombatLogicBody asset
 No bone-based CombatLogicBody authoring
 No prefab or Animator data read by Core
@@ -461,7 +454,7 @@ TryGetAttackHitboxes(FighterState)
 ```
 
 They are not Unity colliders and do not decide combat results.
-They show the boxes returned by Core queries. The default HurtBox comes from `FighterRoleDefinition`; HitBoxes come from the current MotionData frame.
+They show the boxes returned by Core queries. The default HurtBox comes from `FighterRoleDefinition`; HitBoxes come from the current Motion Timeline frame.
 `GetPushboxes` remains as a reserved simulation/debug API, but no pushbox asset data is currently authored.
 
 ## Logic World Debug View
@@ -557,7 +550,7 @@ Presentation synchronization:
 ```text
 Core is authoritative: position, jumping, attack phase, hit detection, damage, and hit reactions are computed by Core.
 Presentation follows Core state and samples timeline-backed Animator states by Core MotionFrame.
-Timeline-backed Animator playback is locked to deterministic MotionData time; Root Motion is not used for gameplay movement.
+Timeline-backed Animator playback is locked to deterministic Motion Timeline time; Root Motion is not used for gameplay movement.
 ```
 
 For a timeline-backed motion, presentation time is derived from the same Core MotionFrame used by gameplay box queries.
@@ -565,10 +558,10 @@ For a timeline-backed motion, presentation time is derived from the same Core Mo
 Presentation synchronization maps Core motion state to animation sampling:
 
 ```text
-Animator motion time = FighterState.MotionFrame / MotionDataDefinition.FrameRate
+Animator motion time = FighterState.MotionFrame / MotionTimeline.FrameRate
 ```
 
-or at minimum ensure that the selected Animator state, motion id, frame rate, and clip length match the MotionData. This is required for visual poses to align exactly with Hitbox / Hurtbox frames.
+or at minimum ensure that the selected Animator state, motion id, frame rate, and clip length match the Motion Timeline. This is required for visual poses to align exactly with Hitbox / Hurtbox frames.
 
 Current controller:
 
@@ -660,8 +653,8 @@ Assets/_Art/Character/Fighter.controller
 
 1. Create `FighterRoleDefinition` assets for each playable character.
 2. Assign those assets to `NetworkBattleRunner.fighterRoles` in the same order on both peers.
-3. Author complete MotionData assets for every gameplay motion.
-4. Tune Core jump physics to the authored Jump MotionData apex and landing frames.
+3. Author complete Motion Timeline assets for every gameplay motion.
+4. Tune Core jump behavior to the authored Jump Motion Timeline apex and landing frames.
 5. Move animation state-name overrides into role or animation-specific assets if characters diverge.
 6. Build combo logic in Core, not Animator.
 7. Keep animation as presentation of Core state.

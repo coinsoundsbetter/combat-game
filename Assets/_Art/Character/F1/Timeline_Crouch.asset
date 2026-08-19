@@ -1,0 +1,37 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 6a81ee13020042cb894f2419ba7db79b, type: 3}
+  m_Name: Timeline_Crouch
+  m_EditorClassIdentifier: 
+  timelineId: Crouch
+  frameRate: 60
+  totalFrames: 30
+  loop: 0
+  sceneViewAnimation: {fileID: 7400000, guid: c59536a8ea83d9e42b062aad096c71af, type: 2}
+  fighterRole: {fileID: 11400000, guid: 566b40b750565c2458c738c1bc11a78b, type: 2}
+  tracks:
+  - rid: 4213427937269514301
+  references:
+    version: 2
+    RefIds:
+    - rid: 4213427937269514301
+      type: {class: MotionTimelineBodyTrackDefinition, ns: GLMFighter.Runtime, asm: Assembly-CSharp}
+      data:
+        trackId: body1
+        displayName: Body1
+        startFrame: 0
+        endFrame: 0
+        entityOffset: {x: 0, y: 0}
+        bodyCenterOffset: {x: 0, y: 0}
+        bodySizeOffset: {x: 0, y: 0}
+        interpolation: 0
+        keys: []

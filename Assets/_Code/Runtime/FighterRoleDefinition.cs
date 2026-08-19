@@ -22,6 +22,8 @@ namespace GLMFighter.Runtime
 
         [Header("Motion Timelines")]
         [SerializeField] private MotionTimelineAsset jumpTimeline;
+        [SerializeField] private MotionTimelineAsset guardTimeline;
+        [SerializeField] private MotionTimelineAsset crouchTimeline;
         [SerializeField] private MotionTimelineAsset lightAttackTimeline;
 
         public string RoleId => roleId;
@@ -35,8 +37,8 @@ namespace GLMFighter.Runtime
             CombatMoveData idle = EmptyMoveData(CombatMoveId.Idle);
             CombatMoveData walkForward = EmptyMoveData(CombatMoveId.WalkForward);
             CombatMoveData walkBackward = EmptyMoveData(CombatMoveId.WalkBackward);
-            CombatMoveData guard = EmptyMoveData(CombatMoveId.Guard);
-            CombatMoveData crouch = EmptyMoveData(CombatMoveId.Crouch);
+            CombatMoveData guard = ToOptionalCoreMoveData(guardTimeline, CombatMoveId.Guard);
+            CombatMoveData crouch = ToOptionalCoreMoveData(crouchTimeline, CombatMoveId.Crouch);
             CombatMoveData jump = ToRequiredCoreMoveData(jumpTimeline, CombatMoveId.Jump);
             CombatMoveData lightAttackMotion = lightAttackTimeline == null
                 ? EmptyMoveData(CombatMoveId.LightAttack)
@@ -82,6 +84,15 @@ namespace GLMFighter.Runtime
         private static CombatMoveData EmptyMoveData(CombatMoveId moveId)
         {
             return new CombatMoveData { MoveId = moveId };
+        }
+
+        private static CombatMoveData ToOptionalCoreMoveData(
+            MotionTimelineAsset timeline,
+            CombatMoveId moveId)
+        {
+            return timeline == null
+                ? EmptyMoveData(moveId)
+                : timeline.ToCoreMoveData(moveId);
         }
 
         private static CombatMoveData ToRequiredCoreMoveData(

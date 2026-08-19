@@ -120,7 +120,7 @@ To use a prefab:
 2. Add `FighterAvatar` to the prefab root.
 3. Assign `VisualRoot` to the child that owns the rendered model and Animator.
 4. Create a `GLM Fighter/Fighter Role Definition` asset.
-5. Set `Standing HurtBox Size` and assign the MotionData assets on the role asset.
+5. Set `Standing HurtBox Size` and assign the Motion Timeline assets on the role asset.
 6. Open the scene object that has `NetworkBattleRunner`.
 7. Add the role asset to `Fighter Roles`.
 8. Press Play.
@@ -138,33 +138,33 @@ Role assets use simple designer-facing field names. Internally, movement-style f
 
 The runtime converts these values to deterministic integer simulation units internally.
 
-Combat boxes should be authored as MotionData Track keys. At match setup, the Core builds deterministic runtime frames from those tracks; it does not create gameplay boxes from prefab colliders, model bounds, role body size, or Animator poses at runtime.
+Combat boxes should be authored as Motion Timeline Track keys. At match setup, the Core builds deterministic runtime frames from those tracks; it does not create gameplay boxes from prefab colliders, model bounds, role body size, or Animator poses at runtime.
 
-Minimum required MotionData setup:
+Minimum required Motion Timeline setup:
 
 - Configure the character's standing HurtBox size on its `Fighter Role Definition` asset.
-- Assign MotionData assets on the role asset for `Jump`, `Crouch`, `LightAttack`, and other states as needed.
-- Set MotionData `Total Frames`, then add a single `HitBox Track` for attack shapes.
+- Assign Motion Timeline assets on the role asset for `Jump` and `LightAttack` as needed.
+- Set the Timeline `Total Frames`, then add a single `HitBox Track` for attack shapes.
 - Add HitBox keys for the frames where those boxes are active.
 - Add a `Body Track` and Body keys for jump, crouch, guard, or attack body changes.
 
 The standing HurtBox comes from the role asset. Its center is automatically placed above the LogicPosition using half of the configured height. The generated runtime move data applies Track-authored EntityOffset, HurtBoxOffset, and HurtBoxScale.
 
-### MotionData Box Editor
+### Motion Timeline Box Editor
 
 Use the dedicated editor for gameplay box work:
 
-1. Open `GLM Fighter/MotionData Editor`.
-2. Assign or create a `MotionData` asset.
-3. Drag the character `Fighter Role Definition` and a temporary `SceneView Animation` into the editor. The editor instantiates `FighterRoleDefinition.Prefab` and reads the role's standing HurtBox size; neither reference is saved on MotionData.
-   Dropping the animation automatically sets `Total Frames` from its duration at the MotionData frame rate; `Total Frames` can then be manually overridden or reset with `Match Clip Length`.
+1. Open `GLM Fighter/Motion Timeline Editor`.
+2. Assign or create a `Motion Timeline` asset.
+3. Drag the character `Fighter Role Definition` and a temporary `SceneView Animation` into the editor. The editor instantiates `FighterRoleDefinition.Prefab` and reads the role's standing HurtBox size; neither reference is saved as gameplay data.
+   Dropping the animation automatically sets `Total Frames` from its duration at the Timeline frame rate; `Total Frames` can then be manually overridden or reset with `Match Clip Length`.
 4. Use `Play`, `Pause`, the frame slider, or the timeline strip to preview the motion. Each authored track is shown as a separate timeline row.
 5. Add a `HitBox Track` from `Tracks`, then select it in the timeline.
 6. Add HitBox keys on the selected track. Every key has its own frame range, center, size, and group.
 7. Use the SceneView preview to inspect the active HitBoxes at the selected frame.
 8. Save assets.
 
-`MotionDataDefinition` is a timeline resource. It stores `TotalFrames` and Track configurations, not serialized per-frame runtime data. A motion has a single HitBox Track and a single Body Track; their keys are expanded into runtime `CombatMoveData` when the role enters a match. Effect authoring ranges are another concrete track type. Future sounds or other authored events should be added as new track types instead of adding more top-level arrays to the asset.
+`MotionTimelineAsset` is a timeline resource. It stores `TotalFrames` and Track configurations, not serialized per-frame runtime data. A motion can contain Body, HitBox and State tracks; they are expanded into runtime `CombatMoveData` when the role enters a match.
 
 Animation is code-driven by `FighterAnimationDriver`. The Animator Controller only needs states with matching names and assigned animation clips. Parameters and transitions are not required for the first hookup.
 

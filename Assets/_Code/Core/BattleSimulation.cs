@@ -195,11 +195,14 @@ namespace GLMFighter.Core
 
             if (fighter.CanAcceptCommand)
             {
-                if (input.Heavy)
+                bool canStartAttack = fighter.Phase != FighterPhase.Guard &&
+                                      fighter.Phase != FighterPhase.Crouch;
+
+                if (canStartAttack && input.Heavy)
                 {
                     StartAttack(ref fighter, fighter.RoleStats.HeavyAttack);
                 }
-                else if (input.Light)
+                else if (canStartAttack && input.Light)
                 {
                     StartAttack(ref fighter, fighter.RoleStats.LightAttack);
                 }
