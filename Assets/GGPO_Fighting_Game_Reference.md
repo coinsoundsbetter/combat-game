@@ -4,6 +4,8 @@
 >
 > 重要：这是一个便于学习和继续开发的“GGPO 风格回滚核心”，不是官方 C++ GGPO SDK 的完整移植。输入预测、状态快照和回滚重演位于 Session；握手、ACK、TimeSync、断线检测、观战等属于后续网络协议层。
 
+快速定位：`GgpoSession<TInput>` 的完整实现位于“14. GGPO 核心类型与 Session 实现”；它采用构造时固定 `playerCount`、一次性分配玩家槽位和同步输入数组的设计。
+
 ## 1. 最终架构
 
 ```text
@@ -24,7 +26,7 @@ FighterSimulation GameStateCodec
 
 ---
 
-## 6. Match 配置、装配和运行
+## 2. 基础对局模式
 
 ### PlayMode.cs
 
@@ -38,6 +40,430 @@ namespace _Src.Game
     }
 }
 ```
+
+## 3. 原型传输实现
+
+### GgpoLocalTransport.cs
+
+```csharp
+using System;
+
+namespace _Src.GGPO
+{
+    public sealed class GgpoLocalTransport<TInput> : IGgpoTransport<TInput>
+    {
+        private bool m_Disposed;
+
+        public void QueueLocalInput(int playerIndex, int frame, TInput input)
+        {
+            ThrowIfDisposed();
+        }
+
+        public void Pump(Action<int, int, TInput> onRemoteInput)
+        {
+            ThrowIfDisposed();
+            if (onRemoteInput == null)
+                throw new ArgumentNullException(nameof(onRemoteInput));
+        }
+
+        public void Dispose()
+        {
+            m_Disposed = true;
+        }
+
+        private void ThrowIfDisposed()
+        {
+            if (m_Disposed)
+                throw new ObjectDisposedException(nameof(GgpoLocalTransport<TInput>));
+        }
+    }
+}
+```
+
+### GgpoTransport.cs
+
+这是用于原型的 UDP 输入传输，不等于官方 GGPO 的完整网络协议。
+
+```csharp
+using System;
+using System.Collections.Generic;
+using System.Net;
+using System.Net.Sockets;
+using _Src.Serialization;
+
+namespace _Src.GGPO
+{
+    public sealed class GgpoTransport<TInput> : IGgpoTransport<TInput>
+    {
+        private const byte Version = 2;
+        private const int HeaderSize = 6;
+        private const int EntryHeaderSize = 7;
+        private const int MaxPacketSize = 1200;
+        private const int ResendHistoryCount = 32;
+
+        private readonly UdpClient m_Udp;
+        private readonly IPEndPoint m_Remote;
+        private readonly IGgpoInputSerializer<TInput> m_Codec;
+        private readonly SortedDictionary<long, InputEntry> m_History =
+            new SortedDictionary<long, InputEntry>();
+
+        private bool m_Disposed;
+
+        public GgpoTransport(
+            int localPort,
+            string remoteIp,
+            int remotePort,
+            IGgpoInputSerializer<TInput> codec)
+        {
+            if (codec == null) throw new ArgumentNullException(nameof(codec));
+            if (localPort < 1 || localPort > ushort.MaxValue)
+                throw new ArgumentOutOfRangeException(nameof(localPort));
+            if (remotePort < 1 || remotePort > ushort.MaxValue)
+                throw new ArgumentOutOfRangeException(nameof(remotePort));
+            if (string.IsNullOrWhiteSpace(remoteIp))
+                throw new ArgumentException("Remote IP is required.", nameof(remoteIp));
+
+            m_Codec = codec;
+            m_Remote = new IPEndPoint(IPAddress.Parse(remoteIp), remotePort);
+            m_Udp = new UdpClient(localPort);
+            m_Udp.Client.Blocking = false;
+        }
+
+        public void QueueLocalInput(int playerIndex, int frame, TInput input)
+        {
+            ThrowIfDisposed();
+            if (playerIndex < 0 || playerIndex > byte.MaxValue)
+                throw new ArgumentOutOfRangeException(nameof(playerIndex));
+            if (frame < 0) throw new ArgumentOutOfRangeException(nameof(frame));
+
+            byte[] payload = m_Codec.Encode(input);
+            if (payload == null || payload.Length > ushort.MaxValue)
+                throw new InvalidOperationException("Invalid encoded input.");
+
+            m_History[MakeHistoryKey(playerIndex, frame)] = new InputEntry
+            {
+                PlayerIndex = playerIndex,
+                Frame = frame,
+                Payload = payload
+            };
+
+            while (m_History.Count > ResendHistoryCount)
+            {
+                long oldestKey = long.MaxValue;
+                foreach (long key in m_History.Keys)
+                {
+                    oldestKey = key;
+                    break;
+                }
+                m_History.Remove(oldestKey);
+            }
+        }
+
+        public void Pump(Action<int, int, TInput> onRemoteInput)
+        {
+            ThrowIfDisposed();
+            if (onRemoteInput == null)
+                throw new ArgumentNullException(nameof(onRemoteInput));
+
+            ReceiveAll(onRemoteInput);
+            SendRecentInputs();
+        }
+
+        public void Dispose()
+        {
+            if (m_Disposed) return;
+            m_Disposed = true;
+            m_History.Clear();
+            m_Udp.Close();
+        }
+
+        private void ReceiveAll(Action<int, int, TInput> onRemoteInput)
+        {
+            while (m_Udp.Client.Poll(0, SelectMode.SelectRead))
+            {
+                IPEndPoint source = new IPEndPoint(IPAddress.Any, 0);
+                byte[] packet;
+                try
+                {
+                    packet = m_Udp.Receive(ref source);
+                }
+                catch (SocketException)
+                {
+                    break;
+                }
+
+                if (!source.Address.Equals(m_Remote.Address) ||
+                    source.Port != m_Remote.Port)
+                    continue;
+
+                DecodePacket(packet, onRemoteInput);
+            }
+        }
+
+        private void SendRecentInputs()
+        {
+            if (m_History.Count == 0) return;
+
+            byte[] packet = new byte[MaxPacketSize];
+            packet[0] = (byte)'G';
+            packet[1] = (byte)'G';
+            packet[2] = (byte)'P';
+            packet[3] = (byte)'O';
+            packet[4] = Version;
+
+            int offset = HeaderSize;
+            int count = 0;
+            var historyKeys = new List<long>(m_History.Keys);
+
+            // 新输入优先，同时携带旧输入以抵抗少量 UDP 丢包。
+            for (int i = historyKeys.Count - 1; i >= 0; i--)
+            {
+                InputEntry entry = m_History[historyKeys[i]];
+                int entrySize = EntryHeaderSize + entry.Payload.Length;
+                if (offset + entrySize > MaxPacketSize) continue;
+
+                packet[offset++] = (byte)entry.PlayerIndex;
+                DeterministicBinary.WriteInt32(packet, offset, entry.Frame);
+                offset += 4;
+                DeterministicBinary.WriteUInt16(
+                    packet, offset, (ushort)entry.Payload.Length);
+                offset += 2;
+                Buffer.BlockCopy(
+                    entry.Payload, 0, packet, offset, entry.Payload.Length);
+                offset += entry.Payload.Length;
+                count++;
+            }
+
+            if (count == 0) return;
+            packet[5] = (byte)count;
+
+            byte[] output = new byte[offset];
+            Buffer.BlockCopy(packet, 0, output, 0, offset);
+            m_Udp.Send(output, output.Length, m_Remote);
+        }
+
+        private void DecodePacket(
+            byte[] packet, Action<int, int, TInput> onRemoteInput)
+        {
+            if (packet == null || packet.Length < HeaderSize) return;
+            if (packet[0] != (byte)'G' ||
+                packet[1] != (byte)'G' ||
+                packet[2] != (byte)'P' ||
+                packet[3] != (byte)'O' ||
+                packet[4] != Version)
+                return;
+
+            int count = packet[5];
+            int offset = HeaderSize;
+            for (int i = 0; i < count; i++)
+            {
+                if (offset + EntryHeaderSize > packet.Length) return;
+
+                int playerIndex = packet[offset++];
+                int frame = DeterministicBinary.ReadInt32(packet, offset);
+                offset += 4;
+                int inputLength = DeterministicBinary.ReadUInt16(packet, offset);
+                offset += 2;
+                if (offset + inputLength > packet.Length) return;
+
+                byte[] inputBytes = new byte[inputLength];
+                Buffer.BlockCopy(packet, offset, inputBytes, 0, inputLength);
+                offset += inputLength;
+
+                TInput input;
+                if (frame >= 0 && m_Codec.TryDecode(inputBytes, out input))
+                    onRemoteInput(playerIndex, frame, input);
+            }
+        }
+
+        private void ThrowIfDisposed()
+        {
+            if (m_Disposed)
+                throw new ObjectDisposedException(nameof(GgpoTransport<TInput>));
+        }
+
+        private static long MakeHistoryKey(int playerIndex, int frame)
+        {
+            return ((long)frame << 32) | (uint)playerIndex;
+        }
+
+        private sealed class InputEntry
+        {
+            public int PlayerIndex;
+            public int Frame;
+            public byte[] Payload;
+        }
+    }
+}
+```
+
+---
+
+## 4. 确定性二进制工具
+
+### DeterministicBinary.cs
+
+```csharp
+using System;
+
+namespace _Src.Serialization
+{
+    public static class DeterministicBinary
+    {
+        public static void WriteInt32(byte[] buffer, int offset, int value)
+        {
+            ValidateRange(buffer, offset, 4);
+            buffer[offset] = (byte)value;
+            buffer[offset + 1] = (byte)(value >> 8);
+            buffer[offset + 2] = (byte)(value >> 16);
+            buffer[offset + 3] = (byte)(value >> 24);
+        }
+
+        public static void WriteUInt32(byte[] buffer, int offset, uint value)
+        {
+            ValidateRange(buffer, offset, 4);
+            buffer[offset] = (byte)value;
+            buffer[offset + 1] = (byte)(value >> 8);
+            buffer[offset + 2] = (byte)(value >> 16);
+            buffer[offset + 3] = (byte)(value >> 24);
+        }
+
+        public static void WriteUInt16(byte[] buffer, int offset, ushort value)
+        {
+            ValidateRange(buffer, offset, 2);
+            buffer[offset] = (byte)value;
+            buffer[offset + 1] = (byte)(value >> 8);
+        }
+
+        public static int ReadInt32(byte[] buffer, int offset)
+        {
+            ValidateRange(buffer, offset, 4);
+            return buffer[offset] |
+                   (buffer[offset + 1] << 8) |
+                   (buffer[offset + 2] << 16) |
+                   (buffer[offset + 3] << 24);
+        }
+
+        public static uint ReadUInt32(byte[] buffer, int offset)
+        {
+            ValidateRange(buffer, offset, 4);
+            return (uint)(buffer[offset] |
+                          (buffer[offset + 1] << 8) |
+                          (buffer[offset + 2] << 16) |
+                          (buffer[offset + 3] << 24));
+        }
+
+        public static ushort ReadUInt16(byte[] buffer, int offset)
+        {
+            ValidateRange(buffer, offset, 2);
+            return (ushort)(buffer[offset] | (buffer[offset + 1] << 8));
+        }
+
+        // FNV-1a 只用于确定性诊断，不用于加密或安全认证。
+        public static ulong CalculateChecksum(byte[] buffer)
+        {
+            if (buffer == null) throw new ArgumentNullException(nameof(buffer));
+            uint hash = 2166136261;
+            foreach (byte value in buffer)
+            {
+                hash ^= value;
+                hash *= 16777619;
+            }
+            return hash;
+        }
+
+        private static void ValidateRange(byte[] buffer, int offset, int count)
+        {
+            if (buffer == null) throw new ArgumentNullException(nameof(buffer));
+            if (offset < 0 || offset > buffer.Length - count)
+                throw new ArgumentOutOfRangeException(nameof(offset));
+        }
+    }
+}
+```
+
+---
+
+## 5. 关键运行流程
+
+### Session 创建
+
+```text
+new GgpoSession(playerCount: 2)
+    ├─ 一次性分配 PlayerQueue[2]
+    ├─ 一次性分配 SynchronizedInput[2]
+    ├─ AddPlayer(P1) → 固定 slot 0
+    ├─ AddPlayer(P2) → 固定 slot 1
+    └─ 第一次 Idle/AddInput/Sync
+         ├─ 检查 registered == playerCount
+         └─ 永久锁定玩家列表
+```
+
+### 正常帧
+
+```text
+MatchRuntime.Update
+  ├─ Session.Idle
+  ├─ SamplePlayerInput
+  ├─ Session.AddLocalInput
+  ├─ Session.TrySynchronizeInputs
+  └─ Session.AdvanceFrame
+       ├─ 保存当前帧快照
+       ├─ RollbackGameAdapter.AdvanceFrame
+       │    └─ FighterSimulation.Step
+       └─ 保存下一帧快照
+```
+
+### 回滚帧
+
+```text
+Session.Idle
+  ├─ Transport 收到真实远端输入
+  ├─ 对比 UsedInputs，发现预测错误
+  ├─ 找到最早错误帧
+  ├─ LoadGameState(错误帧快照)
+  └─ 循环重演到原当前帧
+       ├─ 获取该历史帧输入
+       ├─ FighterSimulation.Step
+       └─ 重新保存快照
+```
+
+## 6. 必须继续补充的生产能力
+
+本文 UDP Transport 只适合原型。正式网络对战至少还需要：
+
+- 握手、Session ID、玩家身份和协议版本协商。
+- Packet Sequence、ACK/ACK Bitfield 和明确的输入确认。
+- RTT、抖动、丢包率和发送队列统计。
+- TimeSync：一端领先过多时主动减速，而不是无限追帧。
+- 连接中断、恢复、超时和退出协议。
+- Checksum 跨 Peer 交换与 Desync 日志。
+- 恶意/错误包校验、输入帧范围限制和速率限制。
+- 录像、观战和重连策略。
+
+## 7. 重写时最值得保留的边界
+
+```text
+FighterSimulation
+    不引用 Unity / GGPO / Socket
+
+RollbackGameAdapter
+    只把 Save / Load / Advance 映射到 Simulation 与 Codec
+
+GgpoSession
+    不理解 HP、招式、动画或 GameObject
+
+Transport
+    只传递 playerIndex + frame + input
+
+Presenter
+    只读取 State，不能把 Transform/Animator 状态写回模拟
+```
+
+不要在 `FighterSimulation.Step` 内播放声音、生成粒子或调用 Animator，因为回滚重演会让同一帧执行多次。应由模拟产生确定性事件，再由表现层按 `frame + eventId` 去重播放。
+
+
+## 8. Match 配置、装配和运行
 
 ### ConnectInfo.cs
 
@@ -331,7 +757,7 @@ namespace _Src.Game
 
 ---
 
-## 7. Unity 表现和入口
+## 9. Unity 表现和入口
 
 ### FighterPresenter.cs
 
@@ -456,7 +882,7 @@ namespace _Src.Game
 - `MatchFactory`：决定本地/网络实现并装配对象。
 - `FighterPresenter`：读取状态并更新 Unity 表现，不反向修改模拟。
 
-## 2. 建议目录
+## 10. 建议目录
 
 ```text
 _Src/
@@ -501,7 +927,7 @@ _Src/
 
 ---
 
-## 3. 战斗模拟层
+## 11. 战斗模拟层
 
 ### PlayerInput.cs
 
@@ -919,7 +1345,7 @@ namespace _Src.Game
 
 ---
 
-## 4. 状态快照与胶水层
+## 12. 状态快照与胶水层
 
 ### GameStateCodec.cs
 
@@ -1114,7 +1540,7 @@ namespace _Src.Game
 
 ---
 
-## 5. 输入与输入序列化
+## 13. 输入与输入序列化
 
 ### IPlayerInputSource.cs
 
@@ -1225,3 +1651,771 @@ namespace _Src.Game
     }
 }
 ```
+
+---
+
+## 14. GGPO 核心类型与 Session 实现
+
+### GgpoPlayer.cs
+
+Session 在构造时确定玩家总数并一次性分配槽位。`AddPlayer` 只依次填写这些固定槽位。
+
+```csharp
+using System;
+using System.Collections.Generic;
+
+namespace _Src.GGPO
+{
+    public enum GgpoPlayerType
+    {
+        Local,
+        Remote
+    }
+
+    [Serializable]
+    public struct GgpoPlayerConfig
+    {
+        public GgpoPlayerType Type;
+        public int InputDelayFrames;
+
+        public GgpoPlayerConfig(GgpoPlayerType type, int inputDelayFrames)
+        {
+            Type = type;
+            InputDelayFrames = inputDelayFrames;
+        }
+    }
+
+    internal sealed class GgpoInputQueue<TInput>
+    {
+        public readonly GgpoPlayerType Type;
+        public readonly int InputDelayFrames;
+        public readonly Dictionary<int, TInput> Inputs =
+            new Dictionary<int, TInput>();
+        public readonly Dictionary<int, TInput> PredictedInputs =
+            new Dictionary<int, TInput>();
+        public readonly Dictionary<int, TInput> UsedInputs =
+            new Dictionary<int, TInput>();
+
+        public int LastLocalSubmittedFrame = -1;
+        public int LastConfirmedRemoteFrame;
+        public TInput InputBeforeHistory;
+        public bool HasInputBeforeHistory;
+
+        public GgpoInputQueue(GgpoPlayerConfig config)
+        {
+            Type = config.Type;
+            InputDelayFrames = config.InputDelayFrames;
+            // 输入延迟之前的帧是确定的 default(TInput)。
+            LastConfirmedRemoteFrame = config.InputDelayFrames - 1;
+        }
+    }
+}
+```
+
+### GgpoSavedState.cs
+
+```csharp
+namespace _Src.GGPO
+{
+    public sealed class GgpoSavedState
+    {
+        public byte[] Buffer;
+        public ulong Checksums;
+    }
+}
+```
+
+### GgpoCallbacks.cs
+
+```csharp
+using System;
+
+namespace _Src.GGPO
+{
+    public sealed class GgpoCallback<TInput>
+    {
+        public Action OnSessionStarted;
+        public Func<int, GgpoSavedState> SaveGameState;
+        public Action<byte[]> LoadGameState;
+
+        // 数组按固定玩家槽位排列并由 Session 复用；回调不能保留或修改它。
+        public Action<int, TInput[]> AdvanceFrame;
+    }
+}
+```
+
+### IGgpoInputSerializer.cs
+
+```csharp
+namespace _Src.GGPO
+{
+    public interface IGgpoInputSerializer<TInput>
+    {
+        byte[] Encode(TInput input);
+        bool TryDecode(byte[] encoded, out TInput input);
+    }
+}
+```
+
+### IGgpoTransport.cs
+
+```csharp
+using System;
+
+namespace _Src.GGPO
+{
+    public interface IGgpoTransport<TInput> : IDisposable
+    {
+        void QueueLocalInput(int playerIndex, int frame, TInput input);
+        void Pump(Action<int, int, TInput> onRemoteInput);
+    }
+}
+```
+
+### GgpoSession.cs
+
+```csharp
+using System;
+using System.Collections.Generic;
+
+namespace _Src.GGPO
+{
+    /// <summary>
+    /// 固定玩家数量的确定性回滚会话。
+    /// 构造时决定玩家总数；AddPlayer 只填写预留槽位。
+    /// </summary>
+    public sealed class GgpoSession<TInput> : IDisposable
+    {
+        private readonly GgpoCallback<TInput> m_Callback;
+        private readonly IGgpoTransport<TInput> m_Transport;
+        private readonly int m_MaxRollbackFrames;
+
+        private readonly GgpoInputQueue<TInput>[] m_PlayerQueues;
+        private readonly TInput[] m_SynchronizedInputs;
+        private readonly Dictionary<int, GgpoSavedState> m_Snapshots =
+            new Dictionary<int, GgpoSavedState>();
+        private readonly List<int> m_FramesToRemove = new List<int>();
+
+        private int m_RegisteredPlayerCount;
+        private int m_CurrentFrame;
+        private int m_EarliestRollbackFrame = -1;
+        private bool m_ArePlayersLocked;
+        private bool m_HasSynchronizedCurrentFrame;
+        private bool m_IsRollingBack;
+        private bool m_IsClosed;
+
+        public int CurrentFrame { get { return m_CurrentFrame; } }
+        public int PlayerCount { get { return m_PlayerQueues.Length; } }
+        public int RegisteredPlayerCount { get { return m_RegisteredPlayerCount; } }
+        public bool IsRollingBack { get { return m_IsRollingBack; } }
+
+        public GgpoSession(
+            GgpoCallback<TInput> callback,
+            IGgpoTransport<TInput> transport,
+            int playerCount,
+            int maxRollbackFrames)
+        {
+            if (callback == null) throw new ArgumentNullException(nameof(callback));
+            if (transport == null) throw new ArgumentNullException(nameof(transport));
+            if (callback.SaveGameState == null)
+                throw new ArgumentException("SaveGameState is required.", nameof(callback));
+            if (callback.LoadGameState == null)
+                throw new ArgumentException("LoadGameState is required.", nameof(callback));
+            if (callback.AdvanceFrame == null)
+                throw new ArgumentException("AdvanceFrame is required.", nameof(callback));
+            if (playerCount <= 0)
+                throw new ArgumentOutOfRangeException(nameof(playerCount));
+            if (maxRollbackFrames <= 0)
+                throw new ArgumentOutOfRangeException(nameof(maxRollbackFrames));
+
+            m_Callback = callback;
+            m_Transport = transport;
+            m_MaxRollbackFrames = maxRollbackFrames;
+            m_PlayerQueues = new GgpoInputQueue<TInput>[playerCount];
+            m_SynchronizedInputs = new TInput[playerCount];
+
+            m_Callback.OnSessionStarted?.Invoke();
+        }
+
+        public int AddPlayer(GgpoPlayerType type, int inputDelayFrames)
+        {
+            ThrowIfClosed();
+            if (m_ArePlayersLocked)
+                throw new InvalidOperationException(
+                    "Players cannot be added after synchronization starts.");
+            if (inputDelayFrames < 0)
+                throw new ArgumentOutOfRangeException(nameof(inputDelayFrames));
+            if (m_RegisteredPlayerCount >= m_PlayerQueues.Length)
+                throw new InvalidOperationException(
+                    "All reserved player slots are already registered.");
+
+            int playerIndex = m_RegisteredPlayerCount;
+            m_PlayerQueues[playerIndex] = new GgpoInputQueue<TInput>(
+                new GgpoPlayerConfig(type, inputDelayFrames));
+            m_RegisteredPlayerCount++;
+            return playerIndex;
+        }
+
+        public void Idle(int timeoutMilliseconds)
+        {
+            ThrowIfClosed();
+            LockPlayers();
+            if (timeoutMilliseconds < 0)
+                throw new ArgumentOutOfRangeException(nameof(timeoutMilliseconds));
+            if (m_HasSynchronizedCurrentFrame)
+                throw new InvalidOperationException(
+                    "AdvanceFrame must be called before Idle.");
+
+            m_Transport.Pump(SetRemoteInput);
+            RollbackResimulate();
+        }
+
+        public void AddLocalInput(int playerIndex, TInput input)
+        {
+            ThrowIfClosed();
+            LockPlayers();
+            if (m_IsRollingBack)
+                throw new InvalidOperationException(
+                    "Cannot submit local input during rollback.");
+            if (m_HasSynchronizedCurrentFrame)
+                throw new InvalidOperationException(
+                    "Local input must be submitted before synchronization.");
+
+            GgpoInputQueue<TInput> queue = GetQueue(playerIndex);
+            if (queue.Type != GgpoPlayerType.Local)
+                throw new InvalidOperationException("The player is not local.");
+            if (queue.LastLocalSubmittedFrame != m_CurrentFrame - 1)
+                throw new InvalidOperationException(
+                    "Local input was already submitted, or a previous frame was skipped.");
+
+            int appliedFrame = m_CurrentFrame + queue.InputDelayFrames;
+            if (queue.Inputs.ContainsKey(appliedFrame))
+                throw new InvalidOperationException(
+                    "An input already exists for frame " + appliedFrame + ".");
+
+            queue.Inputs.Add(appliedFrame, input);
+            try
+            {
+                m_Transport.QueueLocalInput(playerIndex, appliedFrame, input);
+            }
+            catch
+            {
+                queue.Inputs.Remove(appliedFrame);
+                throw;
+            }
+
+            queue.LastLocalSubmittedFrame = m_CurrentFrame;
+        }
+
+        public bool TrySynchronizeInputs(TInput[] output)
+        {
+            ThrowIfClosed();
+            LockPlayers();
+            if (output == null || output.Length != m_PlayerQueues.Length)
+                throw new ArgumentException(
+                    "Input array length must equal PlayerCount.", nameof(output));
+            if (m_HasSynchronizedCurrentFrame)
+                throw new InvalidOperationException(
+                    "Current frame has already been synchronized.");
+            if (!AreAllLocalInputsSubmitted()) return false;
+            if (HasReachedPredictionBarrier()) return false;
+
+            SynchronizeInputsForFrame(m_CurrentFrame, m_SynchronizedInputs);
+            Array.Copy(m_SynchronizedInputs, output, m_SynchronizedInputs.Length);
+            m_HasSynchronizedCurrentFrame = true;
+            return true;
+        }
+
+        public void AdvanceFrame()
+        {
+            ThrowIfClosed();
+            LockPlayers();
+            if (!m_HasSynchronizedCurrentFrame)
+                throw new InvalidOperationException(
+                    "TrySynchronizeInputs must succeed before AdvanceFrame.");
+
+            SaveSnapshotIfMissing(m_CurrentFrame);
+            SimulateOneFrame(m_CurrentFrame, m_SynchronizedInputs);
+            m_CurrentFrame++;
+            m_HasSynchronizedCurrentFrame = false;
+            SaveSnapshotIfMissing(m_CurrentFrame);
+            PruneHistory();
+        }
+
+        public void Close()
+        {
+            if (m_IsClosed) return;
+
+            for (int i = 0; i < m_PlayerQueues.Length; i++)
+            {
+                GgpoInputQueue<TInput> queue = m_PlayerQueues[i];
+                if (queue == null) continue;
+                queue.Inputs.Clear();
+                queue.PredictedInputs.Clear();
+                queue.UsedInputs.Clear();
+            }
+
+            m_Snapshots.Clear();
+            m_FramesToRemove.Clear();
+            m_Transport.Dispose();
+            m_IsClosed = true;
+        }
+
+        public void Dispose()
+        {
+            Close();
+        }
+
+        private void SetRemoteInput(int playerIndex, int frame, TInput input)
+        {
+            ThrowIfClosed();
+            if (m_HasSynchronizedCurrentFrame)
+                throw new InvalidOperationException(
+                    "Remote input cannot be pumped between synchronization and advance.");
+            if (frame < 0) throw new ArgumentOutOfRangeException(nameof(frame));
+
+            int firstRetainedFrame = m_CurrentFrame - m_MaxRollbackFrames;
+            if (frame < firstRetainedFrame)
+                throw new InvalidOperationException(
+                    "Remote input is older than the rollback history.");
+
+            GgpoInputQueue<TInput> queue = GetQueue(playerIndex);
+            if (queue.Type != GgpoPlayerType.Remote)
+                throw new InvalidOperationException(
+                    "Received remote input for a local player.");
+
+            TInput usedInput;
+            bool wasSimulated = frame < m_CurrentFrame &&
+                                queue.UsedInputs.TryGetValue(frame, out usedInput);
+            queue.Inputs[frame] = input;
+            AdvanceLastConfirmedRemoteFrame(queue);
+
+            if (wasSimulated &&
+                !EqualityComparer<TInput>.Default.Equals(input, usedInput))
+                ScheduleRollback(frame);
+            else
+                queue.PredictedInputs.Remove(frame);
+        }
+
+        private void SimulateOneFrame(int frame, TInput[] inputs)
+        {
+            for (int i = 0; i < m_PlayerQueues.Length; i++)
+                m_PlayerQueues[i].UsedInputs[frame] = inputs[i];
+            m_Callback.AdvanceFrame(frame, inputs);
+        }
+
+        private void RollbackResimulate()
+        {
+            if (m_EarliestRollbackFrame < 0) return;
+
+            int rollbackFrame = m_EarliestRollbackFrame;
+            int targetFrame = m_CurrentFrame;
+            GgpoSavedState snapshot;
+            if (!m_Snapshots.TryGetValue(rollbackFrame, out snapshot) ||
+                snapshot == null || snapshot.Buffer == null)
+                throw new InvalidOperationException(
+                    "Missing snapshot for rollback frame " + rollbackFrame + ".");
+
+            m_IsRollingBack = true;
+            m_HasSynchronizedCurrentFrame = false;
+            try
+            {
+                m_Callback.LoadGameState(snapshot.Buffer);
+
+                for (int i = 0; i < m_PlayerQueues.Length; i++)
+                {
+                    RemoveKeysAtOrAfter(
+                        m_PlayerQueues[i].UsedInputs, rollbackFrame);
+                    RemoveKeysAtOrAfter(
+                        m_PlayerQueues[i].PredictedInputs, rollbackFrame);
+                }
+                RemoveSnapshotsAfter(rollbackFrame);
+                m_CurrentFrame = rollbackFrame;
+
+                while (m_CurrentFrame < targetFrame)
+                {
+                    SynchronizeInputsForFrame(
+                        m_CurrentFrame, m_SynchronizedInputs);
+                    SimulateOneFrame(m_CurrentFrame, m_SynchronizedInputs);
+                    m_CurrentFrame++;
+                    SaveSnapshotIfMissing(m_CurrentFrame);
+                }
+
+                m_EarliestRollbackFrame = -1;
+                PruneHistory();
+            }
+            catch
+            {
+                Close();
+                throw;
+            }
+            finally
+            {
+                m_IsRollingBack = false;
+                m_HasSynchronizedCurrentFrame = false;
+            }
+        }
+
+        private bool AreAllLocalInputsSubmitted()
+        {
+            for (int i = 0; i < m_PlayerQueues.Length; i++)
+            {
+                GgpoInputQueue<TInput> queue = m_PlayerQueues[i];
+                if (queue.Type == GgpoPlayerType.Local &&
+                    queue.LastLocalSubmittedFrame != m_CurrentFrame)
+                    return false;
+            }
+            return true;
+        }
+
+        private bool HasReachedPredictionBarrier()
+        {
+            bool hasRemotePlayer = false;
+            int lastConfirmedFrame = int.MaxValue;
+
+            for (int i = 0; i < m_PlayerQueues.Length; i++)
+            {
+                GgpoInputQueue<TInput> queue = m_PlayerQueues[i];
+                if (queue.Type != GgpoPlayerType.Remote) continue;
+                hasRemotePlayer = true;
+                if (queue.LastConfirmedRemoteFrame < lastConfirmedFrame)
+                    lastConfirmedFrame = queue.LastConfirmedRemoteFrame;
+            }
+
+            return hasRemotePlayer &&
+                   m_CurrentFrame - lastConfirmedFrame >= m_MaxRollbackFrames;
+        }
+
+        private void SynchronizeInputsForFrame(int frame, TInput[] output)
+        {
+            for (int i = 0; i < m_PlayerQueues.Length; i++)
+                output[i] = GetInput(m_PlayerQueues[i], frame);
+        }
+
+        private static TInput GetInput(GgpoInputQueue<TInput> queue, int frame)
+        {
+            TInput actualInput;
+            if (queue.Inputs.TryGetValue(frame, out actualInput))
+            {
+                queue.PredictedInputs.Remove(frame);
+                return actualInput;
+            }
+
+            TInput predictedInput = FindLatestInput(queue, frame);
+            if (queue.Type == GgpoPlayerType.Remote)
+                queue.PredictedInputs[frame] = predictedInput;
+            return predictedInput;
+        }
+
+        private static TInput FindLatestInput(
+            GgpoInputQueue<TInput> queue, int frame)
+        {
+            int latestFrame = -1;
+            TInput result = queue.HasInputBeforeHistory
+                ? queue.InputBeforeHistory
+                : default(TInput);
+
+            foreach (KeyValuePair<int, TInput> pair in queue.Inputs)
+            {
+                if (pair.Key <= frame && pair.Key > latestFrame)
+                {
+                    latestFrame = pair.Key;
+                    result = pair.Value;
+                }
+            }
+            return result;
+        }
+
+        private void SaveSnapshotIfMissing(int frame)
+        {
+            if (m_Snapshots.ContainsKey(frame)) return;
+            GgpoSavedState state = m_Callback.SaveGameState(frame);
+            if (state == null || state.Buffer == null)
+                throw new InvalidOperationException(
+                    "SaveGameState must return a valid buffer.");
+            m_Snapshots.Add(frame, state);
+        }
+
+        private static void AdvanceLastConfirmedRemoteFrame(
+            GgpoInputQueue<TInput> queue)
+        {
+            while (queue.Inputs.ContainsKey(queue.LastConfirmedRemoteFrame + 1))
+                queue.LastConfirmedRemoteFrame++;
+        }
+
+        private void ScheduleRollback(int frame)
+        {
+            if (m_EarliestRollbackFrame < 0 ||
+                frame < m_EarliestRollbackFrame)
+                m_EarliestRollbackFrame = frame;
+        }
+
+        private void PruneHistory()
+        {
+            int firstRetainedFrame = m_CurrentFrame - m_MaxRollbackFrames;
+            if (firstRetainedFrame <= 0) return;
+
+            for (int i = 0; i < m_PlayerQueues.Length; i++)
+            {
+                PruneInputs(m_PlayerQueues[i], firstRetainedFrame);
+                RemoveKeysBefore(
+                    m_PlayerQueues[i].PredictedInputs, firstRetainedFrame);
+                RemoveKeysBefore(
+                    m_PlayerQueues[i].UsedInputs, firstRetainedFrame);
+            }
+            RemoveSnapshotsBefore(firstRetainedFrame);
+        }
+
+        private void PruneInputs(
+            GgpoInputQueue<TInput> queue, int firstRetainedFrame)
+        {
+            m_FramesToRemove.Clear();
+            int latestRemovedFrame = int.MinValue;
+            foreach (KeyValuePair<int, TInput> pair in queue.Inputs)
+            {
+                if (pair.Key >= firstRetainedFrame) continue;
+                m_FramesToRemove.Add(pair.Key);
+                if (pair.Key > latestRemovedFrame)
+                {
+                    latestRemovedFrame = pair.Key;
+                    queue.InputBeforeHistory = pair.Value;
+                    queue.HasInputBeforeHistory = true;
+                }
+            }
+            RemoveCollectedKeys(queue.Inputs);
+        }
+
+        private void RemoveSnapshotsBefore(int firstRetainedFrame)
+        {
+            m_FramesToRemove.Clear();
+            foreach (KeyValuePair<int, GgpoSavedState> pair in m_Snapshots)
+                if (pair.Key < firstRetainedFrame)
+                    m_FramesToRemove.Add(pair.Key);
+            RemoveCollectedKeys(m_Snapshots);
+        }
+
+        private void RemoveSnapshotsAfter(int retainedFrame)
+        {
+            m_FramesToRemove.Clear();
+            foreach (KeyValuePair<int, GgpoSavedState> pair in m_Snapshots)
+                if (pair.Key > retainedFrame)
+                    m_FramesToRemove.Add(pair.Key);
+            RemoveCollectedKeys(m_Snapshots);
+        }
+
+        private void RemoveKeysBefore<TValue>(
+            Dictionary<int, TValue> values, int firstFrame)
+        {
+            m_FramesToRemove.Clear();
+            foreach (KeyValuePair<int, TValue> pair in values)
+                if (pair.Key < firstFrame)
+                    m_FramesToRemove.Add(pair.Key);
+            RemoveCollectedKeys(values);
+        }
+
+        private void RemoveKeysAtOrAfter<TValue>(
+            Dictionary<int, TValue> values, int firstFrame)
+        {
+            m_FramesToRemove.Clear();
+            foreach (KeyValuePair<int, TValue> pair in values)
+                if (pair.Key >= firstFrame)
+                    m_FramesToRemove.Add(pair.Key);
+            RemoveCollectedKeys(values);
+        }
+
+        private void RemoveCollectedKeys<TValue>(Dictionary<int, TValue> values)
+        {
+            for (int i = 0; i < m_FramesToRemove.Count; i++)
+                values.Remove(m_FramesToRemove[i]);
+            m_FramesToRemove.Clear();
+        }
+
+        private GgpoInputQueue<TInput> GetQueue(int playerIndex)
+        {
+            if (playerIndex < 0 || playerIndex >= m_PlayerQueues.Length)
+                throw new ArgumentOutOfRangeException(nameof(playerIndex));
+            GgpoInputQueue<TInput> queue = m_PlayerQueues[playerIndex];
+            if (queue == null)
+                throw new InvalidOperationException(
+                    "Player slot " + playerIndex + " is not registered.");
+            return queue;
+        }
+
+        private void LockPlayers()
+        {
+            if (m_ArePlayersLocked) return;
+            if (m_RegisteredPlayerCount != m_PlayerQueues.Length)
+                throw new InvalidOperationException(
+                    "Cannot start synchronization. Expected " +
+                    m_PlayerQueues.Length + " players, but only " +
+                    m_RegisteredPlayerCount + " were registered.");
+
+            for (int i = 0; i < m_PlayerQueues.Length; i++)
+                if (m_PlayerQueues[i] == null)
+                    throw new InvalidOperationException(
+                        "Player slot " + i + " is not registered.");
+            m_ArePlayersLocked = true;
+        }
+
+        private void ThrowIfClosed()
+        {
+            if (m_IsClosed)
+                throw new ObjectDisposedException(nameof(GgpoSession<TInput>));
+        }
+    }
+}
+```
+
+---
+
+## 15. 可选测试启动 UI
+
+### TestGUI.cs
+
+```csharp
+using System;
+using UnityEngine;
+
+namespace _Src.Game
+{
+    /// <summary>
+    /// 原型阶段用于启动本地双人或两个进程 UDP 对局。
+    /// 与 GameMain 放在同一个 GameObject 上。
+    /// </summary>
+    public sealed class TestGUI : MonoBehaviour
+    {
+        private GameMain m_Main;
+        private string m_LocalPort = "7000";
+        private string m_TargetEndpoint = "127.0.0.1:7001";
+        private int m_LocalPlayerIndex;
+        private string m_Error;
+
+        private void Awake()
+        {
+            m_Main = GetComponent<GameMain>();
+        }
+
+        private void OnGUI()
+        {
+            GUILayout.BeginArea(
+                new Rect(16f, 16f, 320f, 330f),
+                GUI.skin.box);
+            GUILayout.Label("GGPO Test Launcher");
+
+            if (m_Main == null)
+            {
+                GUILayout.Label("GameMain is required.");
+                GUILayout.EndArea();
+                return;
+            }
+
+            GUILayout.Label("Local UDP port");
+            m_LocalPort = GUILayout.TextField(m_LocalPort);
+
+            if (GUILayout.Button("Start local two-player match"))
+                TryStart(PlayMode.Local, 0, null, 0);
+
+            GUILayout.Space(10f);
+            GUILayout.Label("Remote endpoint (IPv4:port)");
+            m_TargetEndpoint = GUILayout.TextField(m_TargetEndpoint);
+            GUILayout.Label("This instance controls");
+            m_LocalPlayerIndex = GUILayout.SelectionGrid(
+                m_LocalPlayerIndex,
+                new[] { "Player 1", "Player 2" },
+                2);
+
+            if (GUILayout.Button("Start network match"))
+            {
+                string address;
+                int port;
+                if (!TryParseEndpoint(m_TargetEndpoint, out address, out port))
+                    m_Error = "Endpoint must use IPv4:port.";
+                else
+                    TryStart(
+                        PlayMode.Remote,
+                        m_LocalPlayerIndex,
+                        address,
+                        port);
+            }
+
+            GUILayout.Space(10f);
+            if (m_Main.HasSession)
+            {
+                GUILayout.Label("Frame: " + m_Main.CurrentFrame);
+                GUILayout.Label("P1 HP: " + m_Main.Player1Hp);
+                GUILayout.Label("P2 HP: " + m_Main.Player2Hp);
+                GUILayout.Label("Winner: " + m_Main.Winner);
+            }
+            else
+            {
+                GUILayout.Label("No session started.");
+            }
+
+            if (!string.IsNullOrEmpty(m_Error))
+                GUILayout.Label(m_Error);
+
+            GUILayout.EndArea();
+        }
+
+        private void TryStart(
+            PlayMode mode,
+            int localPlayerIndex,
+            string targetAddress,
+            int targetPort)
+        {
+            int localPort;
+            if (!int.TryParse(m_LocalPort, out localPort) ||
+                localPort < 1 || localPort > ushort.MaxValue)
+            {
+                m_Error = "Local port must be between 1 and 65535.";
+                return;
+            }
+
+            try
+            {
+                m_Main.InitSession(mode, new ConnectInfo
+                {
+                    LocalPort = localPort,
+                    TargetAddress = targetAddress,
+                    TargetPort = targetPort,
+                    LocalPlayerIndex = localPlayerIndex
+                });
+                m_Error = null;
+            }
+            catch (Exception exception)
+            {
+                m_Error = exception.Message;
+                Debug.LogException(exception);
+            }
+        }
+
+        private static bool TryParseEndpoint(
+            string text,
+            out string address,
+            out int port)
+        {
+            address = null;
+            port = 0;
+            if (string.IsNullOrWhiteSpace(text)) return false;
+
+            int separator = text.LastIndexOf(':');
+            if (separator <= 0 || separator == text.Length - 1)
+                return false;
+
+            address = text.Substring(0, separator).Trim();
+            return !string.IsNullOrEmpty(address) &&
+                   int.TryParse(text.Substring(separator + 1), out port) &&
+                   port >= 1 && port <= ushort.MaxValue;
+        }
+    }
+}
+```
+
+本文代码的推荐使用方式是逐层手写并测试，而不是一次性全部复制进项目。优先顺序：`FighterSimulation` → `GameStateCodec` → 本地 Session → SyncTest → UDP Transport → 表现事件去重。
+
+## 16. 官方参考资料
+
+- GGPO 官方仓库：<https://github.com/pond3r/ggpo>
+- Developer Guide：<https://github.com/pond3r/ggpo/blob/master/doc/DeveloperGuide.md>
+- 官方 API 与 callback 定义：<https://github.com/pond3r/ggpo/blob/master/src/include/ggponet.h>
+- VectorWar 示例：<https://github.com/pond3r/ggpo/blob/master/src/apps/vectorwar/vectorwar.cpp>
