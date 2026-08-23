@@ -129,6 +129,7 @@ GameObject:
   m_Component:
   - component: {fileID: 243319772}
   - component: {fileID: 243319773}
+  - component: {fileID: 243319774}
   m_Layer: 0
   m_Name: Main
   m_TagString: Untagged
@@ -160,27 +161,26 @@ MonoBehaviour:
   m_GameObject: {fileID: 243319771}
   m_Enabled: 1
   m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: a859c38c86ae90d418e3cf34d89248ca, type: 3}
+  m_Script: {fileID: 11500000, guid: 4a104dcf203144a3846ed3c4fe49b47a, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  enablePresentation: 1
-  enableTemporaryGui: 1
-  createDefaultSceneObjects: 1
-  autoStartLocalBattle: 0
-  defaultPort: 7777
-  debugLogicWorld: 1
-  drawLogicWorldDebugEntities: 1
-  drawLogicWorldDebugHud: 1
-  logLogicWorldDebug: 0
-  logicWorldDebugLogIntervalFrames: 30
-  jumpDebug: 1
-  fighterRoles:
-  - {fileID: 11400000, guid: 566b40b750565c2458c738c1bc11a78b, type: 2}
-  fighterPrefab: {fileID: 114359322480395889, guid: 10fd52659371d764cba376d8e882fbd6, type: 3}
-  characterSlotCount: 1
-  inputDelayFrames: 3
-  inputRedundancyFrames: 12
-  checksumIntervalFrames: 30
+  m_LocalPort: 7000
+  m_RemoteIp: 127.0.0.1
+  m_RemotePort: 7001
+  m_Player1Type: 0
+  m_Player2Type: 1
+--- !u!114 &243319774
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 243319771}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 8d0a1e43a8b8415fba7171b44ec692a0, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
 --- !u!1660057539 &9223372036854775807
 SceneRoots:
   m_ObjectHideFlags: 0
