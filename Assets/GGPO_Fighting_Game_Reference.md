@@ -22,6 +22,429 @@ RollbackGameAdapter
 FighterSimulation GameStateCodec
 ```
 
+---
+
+## 6. Match 配置、装配和运行
+
+### PlayMode.cs
+
+```csharp
+namespace _Src.Game
+{
+    public enum PlayMode
+    {
+        Local,
+        Remote
+    }
+}
+```
+
+### ConnectInfo.cs
+
+```csharp
+namespace _Src.Game
+{
+    public struct ConnectInfo
+    {
+        public int LocalPort;
+        public string TargetAddress;
+        public int TargetPort;
+
+        // 网络对局中，本机控制固定槽位 0 或 1。
+        public int LocalPlayerIndex;
+    }
+}
+```
+
+### MatchConfig.cs
+
+```csharp
+namespace _Src.Game
+{
+    public sealed class MatchConfig
+    {
+        public const int PlayerCount = 2;
+
+        public PlayMode Mode;
+        public ConnectInfo Connection;
+        public int InputDelayFrames;
+        public int MaxRollbackFrames;
+        public uint RandomSeed;
+        public FighterRules Rules;
+
+        public static MatchConfig CreateLocal()
+        {
+            return new MatchConfig
+            {
+                Mode = PlayMode.Local,
+                InputDelayFrames = 0,
+                MaxRollbackFrames = 8,
+                RandomSeed = 1,
+                Rules = FighterRules.CreateDefault()
+            };
+        }
+
+        public static MatchConfig CreateNetwork(ConnectInfo connection)
+        {
+            return new MatchConfig
+            {
+                Mode = PlayMode.Remote,
+                Connection = connection,
+                InputDelayFrames = 2,
+                MaxRollbackFrames = 8,
+                RandomSeed = 1,
+                Rules = FighterRules.CreateDefault()
+            };
+        }
+    }
+}
+```
+
+### MatchRuntime.cs
+
+```csharp
+using System;
+using _Src.GGPO;
+
+namespace _Src.Game
+{
+    public sealed class MatchRuntime : IDisposable
+    {
+        public const float TickDuration = 1f / 60f;
+        private const int MaxTicksPerUpdate = 8;
+
+        private readonly GgpoSession<PlayerInput> m_Session;
+        private readonly FighterSimulation m_Simulation;
+        private readonly IPlayerInputSource m_InputSource;
+        private readonly GgpoPlayerType[] m_PlayerTypes;
+        private readonly bool[] m_HasQueuedInput;
+        private readonly PlayerInput[] m_SynchronizedInputs;
+
+        private float m_Accumulator;
+        private bool m_Disposed;
+
+        public int CurrentFrame { get { return m_Session.CurrentFrame; } }
+        public GameState State { get { return m_Simulation.State; } }
+        public bool IsRollingBack { get { return m_Session.IsRollingBack; } }
+
+        public MatchRuntime(
+            GgpoSession<PlayerInput> session,
+            FighterSimulation simulation,
+            IPlayerInputSource inputSource,
+            GgpoPlayerType[] playerTypes)
+        {
+            if (session == null) throw new ArgumentNullException(nameof(session));
+            if (simulation == null) throw new ArgumentNullException(nameof(simulation));
+            if (inputSource == null) throw new ArgumentNullException(nameof(inputSource));
+            if (playerTypes == null || playerTypes.Length != session.PlayerCount)
+                throw new ArgumentException(
+                    "Player type count must equal the Session player count.",
+                    nameof(playerTypes));
+
+            m_Session = session;
+            m_Simulation = simulation;
+            m_InputSource = inputSource;
+            m_PlayerTypes = (GgpoPlayerType[])playerTypes.Clone();
+            m_HasQueuedInput = new bool[playerTypes.Length];
+            m_SynchronizedInputs = new PlayerInput[playerTypes.Length];
+        }
+
+        public void Update(float unscaledDeltaTime)
+        {
+            ThrowIfDisposed();
+            if (unscaledDeltaTime < 0f)
+                throw new ArgumentOutOfRangeException(nameof(unscaledDeltaTime));
+
+            // Pump 可能加载旧快照并重演多个逻辑帧。
+            m_Session.Idle(0);
+            m_Accumulator += unscaledDeltaTime;
+
+            int tickCount = 0;
+            while (m_Accumulator >= TickDuration && tickCount < MaxTicksPerUpdate)
+            {
+                if (!TryAdvanceOneTick()) break;
+                m_Accumulator -= TickDuration;
+                tickCount++;
+            }
+
+            if (tickCount == MaxTicksPerUpdate && m_Accumulator > TickDuration)
+                m_Accumulator = TickDuration;
+        }
+
+        public void Dispose()
+        {
+            if (m_Disposed) return;
+            m_Disposed = true;
+            m_Session.Close();
+        }
+
+        private bool TryAdvanceOneTick()
+        {
+            QueueMissingLocalInputs();
+
+            if (!m_Session.TrySynchronizeInputs(m_SynchronizedInputs))
+                return false;
+
+            m_Session.AdvanceFrame();
+            Array.Clear(m_HasQueuedInput, 0, m_HasQueuedInput.Length);
+            return true;
+        }
+
+        private void QueueMissingLocalInputs()
+        {
+            for (int playerIndex = 0;
+                 playerIndex < m_PlayerTypes.Length;
+                 playerIndex++)
+            {
+                if (m_PlayerTypes[playerIndex] != GgpoPlayerType.Local ||
+                    m_HasQueuedInput[playerIndex])
+                    continue;
+
+                PlayerInput input = m_InputSource.SamplePlayerInput(playerIndex);
+                m_Session.AddLocalInput(playerIndex, input);
+                m_HasQueuedInput[playerIndex] = true;
+            }
+        }
+
+        private void ThrowIfDisposed()
+        {
+            if (m_Disposed)
+                throw new ObjectDisposedException(nameof(MatchRuntime));
+        }
+    }
+}
+```
+
+### MatchFactory.cs
+
+`playerCount` 在创建 Session 时固定。`AddPlayer` 只填写已经预留的槽位，不扩容 Session。
+
+```csharp
+using System;
+using _Src.GGPO;
+
+namespace _Src.Game
+{
+    public static class MatchFactory
+    {
+        public static MatchRuntime Create(
+            MatchConfig config,
+            IPlayerInputSource inputSource)
+        {
+            if (config == null) throw new ArgumentNullException(nameof(config));
+            if (inputSource == null) throw new ArgumentNullException(nameof(inputSource));
+            Validate(config);
+
+            FighterSimulation simulation = new FighterSimulation(config.Rules);
+            GameStateCodec codec = new GameStateCodec();
+            RollbackGameAdapter adapter = new RollbackGameAdapter(
+                simulation, codec, config.RandomSeed);
+            IGgpoTransport<PlayerInput> transport = CreateTransport(config);
+
+            GgpoSession<PlayerInput> session = null;
+            try
+            {
+                session = new GgpoSession<PlayerInput>(
+                    adapter.CreateCallbacks(),
+                    transport,
+                    MatchConfig.PlayerCount,
+                    config.MaxRollbackFrames);
+
+                GgpoPlayerType[] playerTypes = CreatePlayerTypes(config);
+                for (int playerIndex = 0;
+                     playerIndex < MatchConfig.PlayerCount;
+                     playerIndex++)
+                {
+                    int assignedIndex = session.AddPlayer(
+                        playerTypes[playerIndex],
+                        config.InputDelayFrames);
+                    if (assignedIndex != playerIndex)
+                        throw new InvalidOperationException(
+                            "Unexpected fixed player-slot assignment.");
+                }
+
+                return new MatchRuntime(
+                    session, simulation, inputSource, playerTypes);
+            }
+            catch
+            {
+                if (session != null) session.Close();
+                else transport.Dispose();
+                throw;
+            }
+        }
+
+        private static IGgpoTransport<PlayerInput> CreateTransport(MatchConfig config)
+        {
+            if (config.Mode == PlayMode.Local)
+                return new GgpoLocalTransport<PlayerInput>();
+
+            return new GgpoTransport<PlayerInput>(
+                config.Connection.LocalPort,
+                config.Connection.TargetAddress,
+                config.Connection.TargetPort,
+                new PlayerInputSerializer());
+        }
+
+        private static GgpoPlayerType[] CreatePlayerTypes(MatchConfig config)
+        {
+            GgpoPlayerType[] result =
+                new GgpoPlayerType[MatchConfig.PlayerCount];
+
+            for (int playerIndex = 0; playerIndex < result.Length; playerIndex++)
+            {
+                bool isLocal = config.Mode == PlayMode.Local ||
+                               config.Connection.LocalPlayerIndex == playerIndex;
+                result[playerIndex] = isLocal
+                    ? GgpoPlayerType.Local
+                    : GgpoPlayerType.Remote;
+            }
+            return result;
+        }
+
+        private static void Validate(MatchConfig config)
+        {
+            if (config.InputDelayFrames < 0)
+                throw new ArgumentOutOfRangeException(nameof(config.InputDelayFrames));
+            if (config.MaxRollbackFrames <= 0)
+                throw new ArgumentOutOfRangeException(nameof(config.MaxRollbackFrames));
+            if (config.Mode != PlayMode.Remote) return;
+
+            if (config.Connection.LocalPlayerIndex < 0 ||
+                config.Connection.LocalPlayerIndex >= MatchConfig.PlayerCount)
+                throw new ArgumentOutOfRangeException(
+                    nameof(config.Connection.LocalPlayerIndex));
+            if (config.Connection.LocalPort < 1 ||
+                config.Connection.LocalPort > ushort.MaxValue)
+                throw new ArgumentOutOfRangeException(nameof(config.Connection.LocalPort));
+            if (config.Connection.TargetPort < 1 ||
+                config.Connection.TargetPort > ushort.MaxValue)
+                throw new ArgumentOutOfRangeException(nameof(config.Connection.TargetPort));
+            if (string.IsNullOrWhiteSpace(config.Connection.TargetAddress))
+                throw new ArgumentException(
+                    "Target address is required.",
+                    nameof(config.Connection.TargetAddress));
+        }
+    }
+}
+```
+
+---
+
+## 7. Unity 表现和入口
+
+### FighterPresenter.cs
+
+```csharp
+using UnityEngine;
+
+namespace _Src.Game
+{
+    public sealed class FighterPresenter : MonoBehaviour
+    {
+        private const float LogicUnitsPerUnityUnit = 1000f;
+
+        [SerializeField] private Transform m_PlayerOne;
+        [SerializeField] private Transform m_PlayerTwo;
+
+        public void Present(GameState state)
+        {
+            PresentFighter(m_PlayerOne, state.P1);
+            PresentFighter(m_PlayerTwo, state.P2);
+        }
+
+        private static void PresentFighter(Transform target, FighterState state)
+        {
+            if (target == null) return;
+
+            Vector3 position = target.position;
+            position.x = state.PositionX / LogicUnitsPerUnityUnit;
+            target.position = position;
+
+            Vector3 scale = target.localScale;
+            float absoluteScaleX = Mathf.Abs(scale.x);
+            scale.x = state.Facing >= 0 ? absoluteScaleX : -absoluteScaleX;
+            target.localScale = scale;
+        }
+    }
+}
+```
+
+### GameMain.cs
+
+```csharp
+using System;
+using UnityEngine;
+
+namespace _Src.Game
+{
+    public sealed class GameMain : MonoBehaviour
+    {
+        [SerializeField] private FighterPresenter m_Presenter;
+
+        private IPlayerInputSource m_InputSource;
+        private MatchRuntime m_Runtime;
+
+        public bool HasSession { get { return m_Runtime != null; } }
+        public int CurrentFrame { get { return m_Runtime != null ? m_Runtime.CurrentFrame : 0; } }
+        public int Player1Hp { get { return m_Runtime != null ? m_Runtime.State.P1.Hp : 0; } }
+        public int Player2Hp { get { return m_Runtime != null ? m_Runtime.State.P2.Hp : 0; } }
+        public int Winner { get { return m_Runtime != null ? m_Runtime.State.Winner : -1; } }
+
+        private void Awake()
+        {
+            m_InputSource = new UnityPlayerInputSource();
+        }
+
+        private void Update()
+        {
+            if (m_Runtime == null) return;
+            m_Runtime.Update(Time.unscaledDeltaTime);
+            if (m_Presenter != null) m_Presenter.Present(m_Runtime.State);
+        }
+
+        private void OnDestroy()
+        {
+            StopMatch();
+        }
+
+        public void InitSession(PlayMode playMode, ConnectInfo connectInfo)
+        {
+            MatchConfig config = playMode == PlayMode.Local
+                ? MatchConfig.CreateLocal()
+                : MatchConfig.CreateNetwork(connectInfo);
+            StartMatch(config);
+        }
+
+        public void StartLocalMatch()
+        {
+            StartMatch(MatchConfig.CreateLocal());
+        }
+
+        public void StartNetworkMatch(ConnectInfo connectInfo)
+        {
+            StartMatch(MatchConfig.CreateNetwork(connectInfo));
+        }
+
+        public void StopMatch()
+        {
+            if (m_Runtime == null) return;
+            m_Runtime.Dispose();
+            m_Runtime = null;
+        }
+
+        private void StartMatch(MatchConfig config)
+        {
+            if (config == null) throw new ArgumentNullException(nameof(config));
+            StopMatch();
+            m_Runtime = MatchFactory.Create(config, m_InputSource);
+            if (m_Presenter != null) m_Presenter.Present(m_Runtime.State);
+        }
+    }
+}
+```
+
+
 职责：
 
 - `FighterSimulation`：唯一权威战斗状态和确定性逻辑。
@@ -802,4 +1225,3 @@ namespace _Src.Game
     }
 }
 ```
-
