@@ -343,6 +343,9 @@ MonoBehaviour:
   unitsPerLogicX: 0.25
   playerSpacing: 3
   verticalPosition: 0.5
+  useConfirmedRemotePresentation: 1
+  remoteDisplayDelayFrames: 2
+  remotePositionSmoothing: 18
 --- !u!1 &1110746980
 GameObject:
   m_ObjectHideFlags: 0

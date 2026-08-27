@@ -74,19 +74,25 @@ namespace _Code {
             int localPort,
             string remoteIp,
             int remotePort,
-            int localPlayerIndex) {
+            int localPlayerIndex,
+            int simulatedReceiveDelayMilliseconds) {
             if (localPlayerIndex < 0 || localPlayerIndex >= MaxPlayerCount)
                 throw new ArgumentOutOfRangeException(nameof(localPlayerIndex));
+            if (simulatedReceiveDelayMilliseconds < 0)
+                throw new ArgumentOutOfRangeException(nameof(simulatedReceiveDelayMilliseconds));
 
             Debug.Log(
                 $"Start remote versus. LocalPort={localPort}, " +
-                $"Remote={remoteIp}:{remotePort}, LocalPlayer=P{localPlayerIndex + 1}");
+                $"Remote={remoteIp}:{remotePort}, LocalPlayer=P{localPlayerIndex + 1}, " +
+                $"SimulatedReceiveDelay={simulatedReceiveDelayMilliseconds}ms");
 
+            ResetSession();
             StartSession(new GgpoUdpTransport<FighterInput>(
                 localPort,
                 remoteIp,
                 remotePort,
-                new FighterInputSerializer()));
+                new FighterInputSerializer(),
+                simulatedReceiveDelayMilliseconds));
 
             for (var playerIndex = 0; playerIndex < MaxPlayerCount; playerIndex++)
                 AddPlayer(playerIndex == localPlayerIndex
@@ -224,6 +230,26 @@ namespace _Code {
                 return false;
 
             playerState = states[playerIndex];
+            return true;
+        }
+
+        public bool TryGetNetworkDiagnostics(
+            out int currentFrame,
+            out int lastConfirmedFrame,
+            out int predictedRemoteInputCount,
+            out int rollbackCount) {
+            currentFrame = 0;
+            lastConfirmedFrame = 0;
+            predictedRemoteInputCount = 0;
+            rollbackCount = 0;
+
+            if (!m_IsRunning || m_Session == null)
+                return false;
+
+            currentFrame = m_Session.CurrentFrame;
+            lastConfirmedFrame = m_Session.LastConfirmedFrame;
+            predictedRemoteInputCount = m_Session.PredictedRemoteInputCount;
+            rollbackCount = m_Session.RollbackCount;
             return true;
         }
 

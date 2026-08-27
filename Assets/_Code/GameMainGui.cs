@@ -9,6 +9,7 @@ namespace _Code
         private string m_LocalPort = "7000";
         private string m_RemoteIp = "127.0.0.1";
         private string m_RemotePort = "7001";
+        private string m_SimulatedReceiveDelayMilliseconds = "0";
         private int m_LocalPlayerIndex;
         private string m_Error;
 
@@ -20,7 +21,7 @@ namespace _Code
 
         private void OnGUI()
         {
-            GUILayout.BeginArea(new Rect(16f, 16f, 340f, 400f), GUI.skin.box);
+            GUILayout.BeginArea(new Rect(16f, 16f, 340f, 500f), GUI.skin.box);
             GUILayout.Label("GGPO Test");
 
             if (gameMain == null)
@@ -44,6 +45,9 @@ namespace _Code
             m_RemoteIp = GUILayout.TextField(m_RemoteIp);
             GUILayout.Label("对端 UDP 端口");
             m_RemotePort = GUILayout.TextField(m_RemotePort);
+            GUILayout.Label("模拟单向接收延迟 (ms)");
+            m_SimulatedReceiveDelayMilliseconds = GUILayout.TextField(
+                m_SimulatedReceiveDelayMilliseconds);
             GUILayout.Label("本实例控制");
             m_LocalPlayerIndex = GUILayout.SelectionGrid(
                 m_LocalPlayerIndex,
@@ -56,6 +60,20 @@ namespace _Code
             if (GUILayout.Button("重置"))
                 gameMain.ResetSession();
 
+            int currentFrame;
+            int lastConfirmedFrame;
+            int predictedRemoteInputCount;
+            int rollbackCount;
+            if (gameMain.TryGetNetworkDiagnostics(
+                    out currentFrame,
+                    out lastConfirmedFrame,
+                    out predictedRemoteInputCount,
+                    out rollbackCount)) {
+                GUILayout.Space(8f);
+                GUILayout.Label($"逻辑帧: {currentFrame}，确认帧: {lastConfirmedFrame}");
+                GUILayout.Label($"远端预测: {predictedRemoteInputCount}，回滚: {rollbackCount}");
+            }
+
             if (!string.IsNullOrEmpty(m_Error))
                 GUILayout.Label(m_Error);
 
@@ -66,11 +84,16 @@ namespace _Code
         {
             int localPort;
             int remotePort;
+            int simulatedReceiveDelayMilliseconds;
             if (!int.TryParse(m_LocalPort, out localPort) ||
                 !int.TryParse(m_RemotePort, out remotePort) ||
+                !int.TryParse(
+                    m_SimulatedReceiveDelayMilliseconds,
+                    out simulatedReceiveDelayMilliseconds) ||
                 localPort < 1 || localPort > ushort.MaxValue ||
-                remotePort < 1 || remotePort > ushort.MaxValue) {
-                m_Error = "端口必须是 1 到 65535 的整数。";
+                remotePort < 1 || remotePort > ushort.MaxValue ||
+                simulatedReceiveDelayMilliseconds < 0) {
+                m_Error = "端口必须是 1 到 65535，延迟必须是非负整数。";
                 return;
             }
 
@@ -79,7 +102,8 @@ namespace _Code
                     localPort,
                     m_RemoteIp,
                     remotePort,
-                    m_LocalPlayerIndex);
+                    m_LocalPlayerIndex,
+                    simulatedReceiveDelayMilliseconds);
                 m_Error = null;
             }
             catch (System.Exception exception) {

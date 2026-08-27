@@ -20,6 +20,20 @@ namespace _Code.GGPO
         private int m_RegisteredPlayerCount;
         private int m_InputDelayFrames;
         private bool m_IsClosed;
+        private int m_PredictedRemoteInputCount;
+        private int m_RollbackCount;
+
+        public int CurrentFrame {
+            get { return m_CurrentFrame; }
+        }
+
+        public int PredictedRemoteInputCount {
+            get { return m_PredictedRemoteInputCount; }
+        }
+
+        public int RollbackCount {
+            get { return m_RollbackCount; }
+        }
 
         /// <summary>
         /// 双方输入均已连续确认的最新逻辑帧。
@@ -181,7 +195,10 @@ namespace _Code.GGPO
             //只有远端玩家,我们才会记录预测输入
             if (queue.PlayerType == GgpoPlayerType.Remote)
             {
-                queue.PredictedInputs.Add(frame, predictedInput);
+                if (!queue.PredictedInputs.ContainsKey(frame)) {
+                    queue.PredictedInputs.Add(frame, predictedInput);
+                    m_PredictedRemoteInputCount++;
+                }
             }
 
             return predictedInput;
@@ -278,6 +295,8 @@ namespace _Code.GGPO
                 // 确认回滚从哪里开始执行_应该从最早发现预测错误的帧号开始
                 if (m_EarliestRollbackFrame < 0 || frame < m_EarliestRollbackFrame)
                 {
+                    if (m_EarliestRollbackFrame < 0)
+                        m_RollbackCount++;
                     m_EarliestRollbackFrame = frame;
                 }
             }

@@ -17,6 +17,7 @@ namespace _Code.Presentation {
         public float unitsPerLogicX = 0.25f;
         public float playerSpacing = 3f;
         public float verticalPosition = 0.5f;
+        public bool useConfirmedRemotePresentation = true;
         [Min(0)] public int remoteDisplayDelayFrames = 2;
         [Min(0f)] public float remotePositionSmoothing = 18f;
 
@@ -45,7 +46,8 @@ namespace _Code.Presentation {
                 if (view == null)
                     continue;
 
-                if (gameMain.IsLocalPlayer(playerIndex)) {
+                if (gameMain.IsLocalPlayer(playerIndex) ||
+                    !useConfirmedRemotePresentation) {
                     PlayerState currentState;
                     if (!gameMain.TryGetRenderPlayerState(
                             playerIndex,

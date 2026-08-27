@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 
@@ -18,15 +19,19 @@ namespace _Code.GGPO {
         private readonly UdpClient m_Udp;
         private readonly IPEndPoint m_RemoteEndpoint;
         private readonly IGgpoInputSerializer<TInput> m_Serializer;
+        private readonly long m_SimulatedReceiveDelayTicks;
         private readonly SortedDictionary<long, InputEntry> m_History =
             new SortedDictionary<long, InputEntry>();
+        private readonly List<PendingPacket> m_PendingPackets =
+            new List<PendingPacket>();
         private bool m_Disposed;
 
         public GgpoUdpTransport(
             int localPort,
             string remoteIp,
             int remotePort,
-            IGgpoInputSerializer<TInput> serializer) {
+            IGgpoInputSerializer<TInput> serializer,
+            int simulatedReceiveDelayMilliseconds = 0) {
             if (serializer == null)
                 throw new ArgumentNullException(nameof(serializer));
             if (localPort < 1 || localPort > ushort.MaxValue)
@@ -35,12 +40,17 @@ namespace _Code.GGPO {
                 throw new ArgumentOutOfRangeException(nameof(remotePort));
             if (string.IsNullOrWhiteSpace(remoteIp))
                 throw new ArgumentException("Remote IP is required.", nameof(remoteIp));
+            if (simulatedReceiveDelayMilliseconds < 0)
+                throw new ArgumentOutOfRangeException(
+                    nameof(simulatedReceiveDelayMilliseconds));
 
             IPAddress remoteAddress;
             if (!IPAddress.TryParse(remoteIp, out remoteAddress))
                 throw new ArgumentException("Remote IP must be a valid IP address.", nameof(remoteIp));
 
             m_Serializer = serializer;
+            m_SimulatedReceiveDelayTicks =
+                (long)simulatedReceiveDelayMilliseconds * Stopwatch.Frequency / 1000L;
             m_RemoteEndpoint = new IPEndPoint(remoteAddress, remotePort);
             m_Udp = new UdpClient(localPort);
             m_Udp.Client.Blocking = false;
@@ -79,7 +89,8 @@ namespace _Code.GGPO {
             if (onRemoteInput == null)
                 throw new ArgumentNullException(nameof(onRemoteInput));
 
-            ReceiveAll(onRemoteInput);
+            ReceiveAll();
+            DeliverPendingPackets(onRemoteInput);
             SendRecentInputs();
         }
 
@@ -89,10 +100,11 @@ namespace _Code.GGPO {
 
             m_Disposed = true;
             m_History.Clear();
+            m_PendingPackets.Clear();
             m_Udp.Close();
         }
 
-        private void ReceiveAll(Action<int, int, TInput> onRemoteInput) {
+        private void ReceiveAll() {
             while (m_Udp.Client.Poll(0, SelectMode.SelectRead)) {
                 var source = new IPEndPoint(IPAddress.Any, 0);
                 byte[] packet;
@@ -107,7 +119,23 @@ namespace _Code.GGPO {
                     source.Port != m_RemoteEndpoint.Port)
                     continue;
 
-                DecodePacket(packet, onRemoteInput);
+                m_PendingPackets.Add(new PendingPacket {
+                    Packet = packet,
+                    DeliverAtTimestamp = Stopwatch.GetTimestamp() +
+                                         m_SimulatedReceiveDelayTicks,
+                });
+            }
+        }
+
+        private void DeliverPendingPackets(Action<int, int, TInput> onRemoteInput) {
+            var now = Stopwatch.GetTimestamp();
+            for (var i = m_PendingPackets.Count - 1; i >= 0; i--) {
+                var pending = m_PendingPackets[i];
+                if (pending.DeliverAtTimestamp > now)
+                    continue;
+
+                DecodePacket(pending.Packet, onRemoteInput);
+                m_PendingPackets.RemoveAt(i);
             }
         }
 
@@ -217,6 +245,11 @@ namespace _Code.GGPO {
             public int PlayerIndex;
             public int Frame;
             public byte[] Payload;
+        }
+
+        private struct PendingPacket {
+            public byte[] Packet;
+            public long DeliverAtTimestamp;
         }
     }
 }
