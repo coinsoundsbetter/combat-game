@@ -65,7 +65,8 @@ namespace _Code.GGPO
 
         public void Idle(int timeoutMilliseconds)
         {
-            m_Transport.Pump()
+            m_Transport.Pump(ReceiveRemoteInput);
+            RollbackResimulate();
         }
 
         public bool TrySynqhronizeInputs(TInput[] inputs)
@@ -76,6 +77,11 @@ namespace _Code.GGPO
             }
 
             if (!IsAllLocalInputsSubmitted())
+            {
+                return false;
+            }
+
+            if (IsRemotePredictionLimitReached())
             {
                 return false;
             }
@@ -91,6 +97,7 @@ namespace _Code.GGPO
         public void AdvanceFrame()
         {
             SaveSnapshot(m_CurrentFrame);
+            PruneHistory();
 
             //逻辑帧模拟
             SimulateOneFrame(m_CurrentFrame, m_SynchronizedInputs);
@@ -104,7 +111,12 @@ namespace _Code.GGPO
 
         public int AddPlayer(GgpoPlayerType playerType)
         {
-            var playerIndex = m_RegisteredPlayerCount;
+            if (m_RegisteredPlayerCount >= m_PlayerQueues.Length)
+            {
+                throw new InvalidOperationException("Max player count reached");
+            }
+
+            var playerIndex = m_RegisteredPlayerCount;  
             m_PlayerQueues[playerIndex] = new GgpoInputQueue<TInput>(playerType, m_InputDelayFrames);
             m_RegisteredPlayerCount++;
             return playerIndex;
@@ -156,12 +168,15 @@ namespace _Code.GGPO
         private TInput GetLastInput(GgpoInputQueue<TInput> queue, int frame)
         {
             var result = queue.HasInputBeforeHistory ? queue.InputBeforeHistory : default(TInput);
+            var latestFrame = queue.HasInputBeforeHistory
+                ? queue.InputBeforeHistoryFrame
+                : -1;
             foreach (KeyValuePair<int, TInput> pair in queue.Inputs)
             {
-                if (pair.Key <= frame)
+                if (pair.Key <= frame && pair.Key > latestFrame)
                 {
-
                     result = pair.Value;
+                    latestFrame = pair.Key;
                 }
             }
 
@@ -182,6 +197,25 @@ namespace _Code.GGPO
             return true;
         }
 
+        private bool IsRemotePredictionLimitReached()
+        {
+            var hasRemotePlayer = false;
+            var lastConfirmedFrame = int.MaxValue;
+
+            foreach (var queue in m_PlayerQueues)
+            {
+                if (queue.PlayerType != GgpoPlayerType.Remote)
+                    continue;
+
+                hasRemotePlayer = true;
+                if (queue.LastConfirmedRemoteFrame < lastConfirmedFrame)
+                    lastConfirmedFrame = queue.LastConfirmedRemoteFrame;
+            }
+
+            return hasRemotePlayer &&
+                   m_CurrentFrame - lastConfirmedFrame >= m_MaxRollbackFrames;
+        }
+
         private void SaveSnapshot(int frame)
         {
             if (!m_Snapshots.ContainsKey(frame))
@@ -195,7 +229,8 @@ namespace _Code.GGPO
             var leftLimit = m_CurrentFrame - m_MaxRollbackFrames;
             if (frame < leftLimit)
             {
-                throw new InvalidOperationException("远端输入逻辑帧低于回滚最小帧区间");
+                // UDP 会重发历史输入；超出回滚窗口的包无法再影响当前状态，直接丢弃。
+                return;
             }
 
             var queue = m_PlayerQueues[playerIndex];
@@ -301,6 +336,48 @@ namespace _Code.GGPO
             RemoveCollectedKeys(m_Snapshots);
         }
 
+        private void PruneHistory()
+        {
+            var firstRetainedFrame = m_CurrentFrame - m_MaxRollbackFrames;
+            if (firstRetainedFrame <= 0)
+                return;
+
+            for (var i = 0; i < m_PlayerQueues.Length; i++) {
+                var queue = m_PlayerQueues[i];
+                PreserveInputBeforeHistory(queue, firstRetainedFrame);
+                RemoveKeysBefore(queue.Inputs, firstRetainedFrame);
+                RemoveKeysBefore(queue.PredictedInputs, firstRetainedFrame);
+                RemoveKeysBefore(queue.UsedInputs, firstRetainedFrame);
+            }
+
+            RemoveKeysBefore(m_Snapshots, firstRetainedFrame);
+        }
+
+        private void PreserveInputBeforeHistory(
+            GgpoInputQueue<TInput> queue,
+            int firstRetainedFrame)
+        {
+            var latestFrame = queue.HasInputBeforeHistory
+                ? queue.InputBeforeHistoryFrame
+                : -1;
+            var latestInput = queue.HasInputBeforeHistory
+                ? queue.InputBeforeHistory
+                : default(TInput);
+
+            foreach (var pair in queue.Inputs) {
+                if (pair.Key < firstRetainedFrame && pair.Key > latestFrame) {
+                    latestFrame = pair.Key;
+                    latestInput = pair.Value;
+                }
+            }
+
+            if (latestFrame >= 0) {
+                queue.InputBeforeHistoryFrame = latestFrame;
+                queue.InputBeforeHistory = latestInput;
+                queue.HasInputBeforeHistory = true;
+            }
+        }
+
         private void RemoveKeysAtOrAfter<TValue>(
             Dictionary<int, TValue> values,
             int firstFrame)
@@ -310,6 +387,20 @@ namespace _Code.GGPO
             foreach (KeyValuePair<int, TValue> pair in values)
             {
                 if (pair.Key >= firstFrame)
+                    m_FramesToRemove.Add(pair.Key);
+            }
+
+            RemoveCollectedKeys(values);
+        }
+
+        private void RemoveKeysBefore<TValue>(
+            Dictionary<int, TValue> values,
+            int firstRetainedFrame)
+        {
+            m_FramesToRemove.Clear();
+
+            foreach (var pair in values) {
+                if (pair.Key < firstRetainedFrame)
                     m_FramesToRemove.Add(pair.Key);
             }
 

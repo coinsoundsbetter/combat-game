@@ -16,8 +16,4 @@ namespace _Code.GGPO {
         /// <param name="onRemoteInput"></param>
         void Pump(Action<int, int, TInput> onRemoteInput);
     }
-    
-    public class GgpoTransport {
-        
-    }
 }

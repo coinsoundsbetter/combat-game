@@ -1,4 +1,4 @@
-namespace _Code.Game {
+namespace _Code.Simulation {
     public class PlayMode {
         
     }
