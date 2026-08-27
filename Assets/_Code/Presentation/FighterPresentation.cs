@@ -4,6 +4,7 @@ using UnityEngine;
 namespace _Code.Presentation {
     /// <summary>
     /// 将确定性逻辑状态映射至 Unity 场景对象。
+    /// 远端角色使用确认帧缓冲，避免将回滚修正直接显示出来。
     /// 不会向逻辑层写入任何数据。
     /// </summary>
     public sealed class FighterPresentation : MonoBehaviour {
@@ -16,9 +17,13 @@ namespace _Code.Presentation {
         public float unitsPerLogicX = 0.25f;
         public float playerSpacing = 3f;
         public float verticalPosition = 0.5f;
+        [Min(0)] public int remoteDisplayDelayFrames = 2;
+        [Min(0f)] public float remotePositionSmoothing = 18f;
 
         private readonly Transform[] m_PlayerViews = new Transform[PlayerCount];
         private readonly Vector3[] m_BasePositions = new Vector3[PlayerCount];
+        private readonly Vector3[] m_DisplayPositions = new Vector3[PlayerCount];
+        private readonly bool[] m_HasDisplayPosition = new bool[PlayerCount];
 
         private void Awake() {
             if (gameMain == null)
@@ -40,16 +45,40 @@ namespace _Code.Presentation {
                 if (view == null)
                     continue;
 
-                PlayerState currentState;
-                if (!gameMain.TryGetRenderPlayerState(
+                if (gameMain.IsLocalPlayer(playerIndex)) {
+                    PlayerState currentState;
+                    if (!gameMain.TryGetRenderPlayerState(
+                            playerIndex,
+                            out _,
+                            out currentState,
+                            out _))
+                        continue;
+
+                    SetDisplayPosition(
                         playerIndex,
-                        out _,
-                        out currentState,
-                        out _))
+                        GetWorldPosition(playerIndex, currentState.X));
+                    continue;
+                }
+
+                PlayerState confirmedState;
+                if (!gameMain.TryGetConfirmedPlayerState(
+                        playerIndex,
+                        remoteDisplayDelayFrames,
+                        out confirmedState))
                     continue;
 
-                view.position = m_BasePositions[playerIndex] +
-                                Vector3.right * currentState.X * unitsPerLogicX;
+                var targetPosition = GetWorldPosition(playerIndex, confirmedState.X);
+                if (!m_HasDisplayPosition[playerIndex]) {
+                    SetDisplayPosition(playerIndex, targetPosition);
+                    continue;
+                }
+
+                var smoothingAlpha = remotePositionSmoothing <= 0f
+                    ? 1f
+                    : 1f - Mathf.Exp(-remotePositionSmoothing * Time.unscaledDeltaTime);
+                SetDisplayPosition(
+                    playerIndex,
+                    Vector3.Lerp(m_DisplayPositions[playerIndex], targetPosition, smoothingAlpha));
             }
         }
 
@@ -91,8 +120,22 @@ namespace _Code.Presentation {
         }
 
         private void CacheBasePositions() {
-            for (var playerIndex = 0; playerIndex < PlayerCount; playerIndex++)
+            for (var playerIndex = 0; playerIndex < PlayerCount; playerIndex++) {
                 m_BasePositions[playerIndex] = m_PlayerViews[playerIndex].position;
+                m_DisplayPositions[playerIndex] = m_BasePositions[playerIndex];
+                m_HasDisplayPosition[playerIndex] = true;
+            }
+        }
+
+        private Vector3 GetWorldPosition(int playerIndex, int logicX) {
+            return m_BasePositions[playerIndex] +
+                   Vector3.right * logicX * unitsPerLogicX;
+        }
+
+        private void SetDisplayPosition(int playerIndex, Vector3 position) {
+            m_DisplayPositions[playerIndex] = position;
+            m_HasDisplayPosition[playerIndex] = true;
+            m_PlayerViews[playerIndex].position = position;
         }
     }
 }

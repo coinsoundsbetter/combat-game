@@ -21,6 +21,28 @@ namespace _Code.GGPO
         private int m_InputDelayFrames;
         private bool m_IsClosed;
 
+        /// <summary>
+        /// 双方输入均已连续确认的最新逻辑帧。
+        /// 本地对局没有远端玩家时，当前已模拟帧都视为已确认。
+        /// </summary>
+        public int LastConfirmedFrame {
+            get {
+                var hasRemotePlayer = false;
+                var lastConfirmedFrame = int.MaxValue;
+
+                foreach (var queue in m_PlayerQueues) {
+                    if (queue == null || queue.PlayerType != GgpoPlayerType.Remote)
+                        continue;
+
+                    hasRemotePlayer = true;
+                    if (queue.LastConfirmedRemoteFrame < lastConfirmedFrame)
+                        lastConfirmedFrame = queue.LastConfirmedRemoteFrame;
+                }
+
+                return hasRemotePlayer ? lastConfirmedFrame : m_CurrentFrame - 1;
+            }
+        }
+
         public GgpoSession(
             GgpoCallback<TInput> callback,
             IGgpoTransport<TInput> transport,

@@ -10,6 +10,7 @@ namespace _Code {
     public class GameMain : MonoBehaviour {
         private const int MaxPlayerCount = 2;
         private const float TickRate = 1f / 60f;
+        private const int PresentationHistoryFrames = 64;
 
         // 回滚窗口
         public int maxRollbackFrames = 8;
@@ -27,6 +28,9 @@ namespace _Code {
         private readonly Dictionary<int, int> m_FrameChecksums = new Dictionary<int, int>();
         private readonly List<int> m_LocalPlayerIndices = new List<int>();
         private readonly List<int> m_RemotePlayerIndices = new List<int>();
+        private readonly Dictionary<int, PlayerState[]> m_PresentationStateHistory =
+            new Dictionary<int, PlayerState[]>();
+        private readonly List<int> m_PresentationFramesToRemove = new List<int>();
 
         private PlayerState[] m_PlayerStates;
         private PlayerState[] m_PreviousRenderPlayerStates;
@@ -102,6 +106,8 @@ namespace _Code {
             m_PreviousRenderPlayerStates = null;
             m_CurrentRenderPlayerStates = null;
             m_FrameChecksums.Clear();
+            m_PresentationStateHistory.Clear();
+            m_PresentationFramesToRemove.Clear();
             m_LocalPlayerIndices.Clear();
             m_RemotePlayerIndices.Clear();
         }
@@ -118,8 +124,12 @@ namespace _Code {
             m_PreviousRenderPlayerStates = new PlayerState[MaxPlayerCount];
             m_CurrentRenderPlayerStates = new PlayerState[MaxPlayerCount];
             m_FrameChecksums.Clear();
+            m_PresentationStateHistory.Clear();
+            m_PresentationFramesToRemove.Clear();
             m_LocalPlayerIndices.Clear();
             m_RemotePlayerIndices.Clear();
+
+            StorePresentationState(0);
 
             m_Transport = transport;
             var callback = new GgpoCallback<FighterInput> {
@@ -188,6 +198,35 @@ namespace _Code {
             return true;
         }
 
+        public bool IsLocalPlayer(int playerIndex) {
+            return m_IsRunning && m_LocalPlayerIndices.Contains(playerIndex);
+        }
+
+        public bool TryGetConfirmedPlayerState(
+            int playerIndex,
+            int displayDelayFrames,
+            out PlayerState playerState) {
+            playerState = default(PlayerState);
+            if (!m_IsRunning || m_Session == null ||
+                playerIndex < 0 || playerIndex >= MaxPlayerCount ||
+                displayDelayFrames < 0)
+                return false;
+
+            // 状态帧 N 表示已经模拟完逻辑帧 N - 1 后的状态。
+            var stateFrame = Mathf.Min(
+                m_GameFrame,
+                m_Session.LastConfirmedFrame + 1 - displayDelayFrames);
+            if (stateFrame < 0)
+                stateFrame = 0;
+
+            PlayerState[] states;
+            if (!m_PresentationStateHistory.TryGetValue(stateFrame, out states))
+                return false;
+
+            playerState = states[playerIndex];
+            return true;
+        }
+
         private void Tick() {
             SubmitLocalInputsOnce();
 
@@ -246,6 +285,8 @@ namespace _Code {
                 m_PlayerStates,
                 m_CurrentRenderPlayerStates,
                 MaxPlayerCount);
+            StorePresentationState(frame + 1);
+            PrunePresentationStateHistory();
 
             var checksum = CalculateChecksum();
             m_FrameChecksums[frame] = checksum;
@@ -285,6 +326,9 @@ namespace _Code {
                     m_PlayerStates[i].AttackCount = reader.ReadInt32();
                 }
 
+                RemovePresentationStatesAfter(snapshotFrame);
+                StorePresentationState(snapshotFrame);
+
                 Debug.Log($"Rollback load snapshot. SnapshotFrame={snapshotFrame}, GameFrame={m_GameFrame}");
             }
         }
@@ -299,6 +343,40 @@ namespace _Code {
 
                 return hash;
             }
+        }
+
+        private void StorePresentationState(int stateFrame) {
+            var states = new PlayerState[MaxPlayerCount];
+            Array.Copy(m_PlayerStates, states, MaxPlayerCount);
+            m_PresentationStateHistory[stateFrame] = states;
+        }
+
+        private void PrunePresentationStateHistory() {
+            var firstRetainedFrame = m_GameFrame - PresentationHistoryFrames;
+            if (firstRetainedFrame <= 0)
+                return;
+
+            m_PresentationFramesToRemove.Clear();
+            foreach (var pair in m_PresentationStateHistory) {
+                if (pair.Key < firstRetainedFrame)
+                    m_PresentationFramesToRemove.Add(pair.Key);
+            }
+
+            for (var i = 0; i < m_PresentationFramesToRemove.Count; i++)
+                m_PresentationStateHistory.Remove(m_PresentationFramesToRemove[i]);
+            m_PresentationFramesToRemove.Clear();
+        }
+
+        private void RemovePresentationStatesAfter(int retainedStateFrame) {
+            m_PresentationFramesToRemove.Clear();
+            foreach (var pair in m_PresentationStateHistory) {
+                if (pair.Key > retainedStateFrame)
+                    m_PresentationFramesToRemove.Add(pair.Key);
+            }
+
+            for (var i = 0; i < m_PresentationFramesToRemove.Count; i++)
+                m_PresentationStateHistory.Remove(m_PresentationFramesToRemove[i]);
+            m_PresentationFramesToRemove.Clear();
         }
 
         private void OnSessionStarted() {
