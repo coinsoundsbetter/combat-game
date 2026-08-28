@@ -22,6 +22,13 @@ namespace _Code.GGPO
         private bool m_IsClosed;
         private int m_PredictedRemoteInputCount;
         private int m_RollbackCount;
+        private int m_LastPublishedConfirmedFrame = -1;
+
+        /// <summary>
+        /// 当一帧的所有远端输入已连续确认、且该帧已经完成模拟时触发。
+        /// 传入的输入不会再因回滚而变化，可安全写入回放或战报。
+        /// </summary>
+        public event Action<int, TInput[]> ConfirmedFrame;
 
         public int CurrentFrame {
             get { return m_CurrentFrame; }
@@ -103,6 +110,7 @@ namespace _Code.GGPO
         {
             m_Transport.Pump(ReceiveRemoteInput);
             RollbackResimulate();
+            PublishNewConfirmedFrames();
         }
 
         public bool TrySynqhronizeInputs(TInput[] inputs)
@@ -143,6 +151,7 @@ namespace _Code.GGPO
             m_HasSynchronizedCurrentFrame = false;
 
             SaveSnapshot(m_CurrentFrame);
+            PublishNewConfirmedFrames();
         }
 
         public int AddPlayer(GgpoPlayerType playerType)
@@ -473,6 +482,43 @@ namespace _Code.GGPO
             {
                 var queue = m_PlayerQueues[i];
                 m_SynchronizedInputs[i] = GetInput(queue, m_CurrentFrame);
+            }
+        }
+
+        private void PublishNewConfirmedFrames()
+        {
+            var lastSimulatedFrame = m_CurrentFrame - 1;
+            var lastPublishableFrame = Math.Min(LastConfirmedFrame, lastSimulatedFrame);
+
+            while (m_LastPublishedConfirmedFrame < lastPublishableFrame)
+            {
+                var frame = ++m_LastPublishedConfirmedFrame;
+                var confirmedInputs = new TInput[m_PlayerQueues.Length];
+
+                for (var playerIndex = 0; playerIndex < m_PlayerQueues.Length; playerIndex++)
+                {
+                    var queue = m_PlayerQueues[playerIndex];
+                    if (queue == null)
+                        throw new InvalidOperationException("Player queue is missing.");
+
+                    // 输入延迟产生的开场空帧没有显式入队，其最终输入就是默认值。
+                    if (frame < queue.InputDelayFrames)
+                    {
+                        confirmedInputs[playerIndex] = default(TInput);
+                        continue;
+                    }
+
+                    TInput input;
+                    if (!queue.Inputs.TryGetValue(frame, out input))
+                    {
+                        throw new InvalidOperationException(
+                            $"Confirmed frame {frame} is missing input for player {playerIndex}.");
+                    }
+
+                    confirmedInputs[playerIndex] = input;
+                }
+
+                ConfirmedFrame?.Invoke(frame, confirmedInputs);
             }
         }
     }

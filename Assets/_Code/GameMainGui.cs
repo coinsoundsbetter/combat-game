@@ -10,18 +10,25 @@ namespace _Code
         private string m_RemoteIp = "127.0.0.1";
         private string m_RemotePort = "7001";
         private string m_SimulatedReceiveDelayMilliseconds = "0";
+        private string m_ReplayPath;
         private int m_LocalPlayerIndex;
         private string m_Error;
+        private string m_ReplayMessage;
+        private Vector2 m_ScrollPosition;
 
         private void Awake()
         {
             if (gameMain == null)
                 gameMain = FindFirstObjectByType<GameMain>();
+
+            if (gameMain != null)
+                m_ReplayPath = gameMain.DefaultReplayPath;
         }
 
         private void OnGUI()
         {
-            GUILayout.BeginArea(new Rect(16f, 16f, 340f, 500f), GUI.skin.box);
+            var panelHeight = Mathf.Max(120f, Screen.height - 32f);
+            GUILayout.BeginArea(new Rect(16f, 16f, 340f, panelHeight), GUI.skin.box);
             GUILayout.Label("GGPO Test");
 
             if (gameMain == null)
@@ -30,6 +37,8 @@ namespace _Code
                 GUILayout.EndArea();
                 return;
             }
+
+            m_ScrollPosition = GUILayout.BeginScrollView(m_ScrollPosition);
 
             if (GUILayout.Button("1. 本地双人"))
                 gameMain.StartLocalVersus();
@@ -60,6 +69,25 @@ namespace _Code
             if (GUILayout.Button("重置"))
                 gameMain.ResetSession();
 
+            GUILayout.Space(8f);
+            GUILayout.Label("3. 回放");
+            GUILayout.Label("文件路径");
+            m_ReplayPath = GUILayout.TextField(m_ReplayPath ?? gameMain.DefaultReplayPath);
+            if (GUILayout.Button("保存已确认回放"))
+                TrySaveReplay();
+            if (GUILayout.Button("加载并播放回放"))
+                TryStartReplay();
+
+            if (gameMain.IsReplayMode) {
+                var replayState = gameMain.IsReplayFinished ? "已播放完成" : "播放中";
+                GUILayout.Label(
+                    $"回放：{replayState}，帧 {gameMain.ReplayCurrentFrame}/" +
+                    $"{gameMain.ReplayFinalFrame + 1}");
+            }
+
+            if (!string.IsNullOrEmpty(m_ReplayMessage))
+                GUILayout.Label(m_ReplayMessage);
+
             int currentFrame;
             int lastConfirmedFrame;
             int predictedRemoteInputCount;
@@ -77,6 +105,7 @@ namespace _Code
             if (!string.IsNullOrEmpty(m_Error))
                 GUILayout.Label(m_Error);
 
+            GUILayout.EndScrollView();
             GUILayout.EndArea();
         }
 
@@ -110,6 +139,24 @@ namespace _Code
                 m_Error = exception.Message;
                 Debug.LogException(exception);
             }
+        }
+
+        private void TrySaveReplay()
+        {
+            string message;
+            if (gameMain.TrySaveReplay(m_ReplayPath, out message))
+                m_ReplayMessage = message;
+            else
+                m_ReplayMessage = message;
+        }
+
+        private void TryStartReplay()
+        {
+            string message;
+            if (gameMain.TryStartReplay(m_ReplayPath, out message))
+                m_ReplayMessage = message;
+            else
+                m_ReplayMessage = message;
         }
     }
 }

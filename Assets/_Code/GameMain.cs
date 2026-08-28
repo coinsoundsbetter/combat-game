@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using _Code.GGPO;
+using _Code.Replay;
 using _Code.Simulation;
 using UnityEngine;
 using UnityEngine.InputSystem;
@@ -11,6 +12,7 @@ namespace _Code {
         private const int MaxPlayerCount = 2;
         private const float TickRate = 1f / 60f;
         private const int PresentationHistoryFrames = 64;
+        private const string ReplayLogicVersion = "fighter-logic-1";
 
         // 回滚窗口
         public int maxRollbackFrames = 8;
@@ -23,13 +25,17 @@ namespace _Code {
 
         private GgpoSession<FighterInput> m_Session;
         private IGgpoTransport<FighterInput> m_Transport;
+        private ReplayRecorder m_ReplayRecorder;
+        private ReplayPlayer m_ReplayPlayer;
 
         private readonly FighterInput[] m_FrameInputs = new FighterInput[MaxPlayerCount];
         private readonly Dictionary<int, int> m_FrameChecksums = new Dictionary<int, int>();
         private readonly List<int> m_LocalPlayerIndices = new List<int>();
         private readonly List<int> m_RemotePlayerIndices = new List<int>();
+
         private readonly Dictionary<int, PlayerState[]> m_PresentationStateHistory =
             new Dictionary<int, PlayerState[]>();
+
         private readonly List<int> m_PresentationFramesToRemove = new List<int>();
 
         private PlayerState[] m_PlayerStates;
@@ -40,6 +46,33 @@ namespace _Code {
         private int m_RegisteredPlayerCount;
         private bool m_HasSubmittedLocalInputForCurrentFrame;
         private bool m_IsRunning;
+        private bool m_IsReplayMode;
+        private bool m_IsReplayFinished;
+
+        public bool IsReplayMode {
+            get { return m_IsReplayMode; }
+        }
+
+        public bool IsReplayFinished {
+            get { return m_IsReplayMode && m_IsReplayFinished; }
+        }
+
+        public int ReplayCurrentFrame {
+            get { return m_ReplayPlayer == null ? 0 : m_ReplayPlayer.CurrentFrame; }
+        }
+
+        public int ReplayFinalFrame {
+            get { return m_ReplayPlayer == null ? -1 : m_ReplayPlayer.FinalFrame; }
+        }
+
+        public string DefaultReplayPath {
+            get {
+                return Path.Combine(
+                    Application.persistentDataPath,
+                    "Replays",
+                    "last-match.fgreplay");
+            }
+        }
 
         private void Awake() {
             Application.runInBackground = true;
@@ -108,6 +141,10 @@ namespace _Code {
             m_TickAccumulator = 0f;
             m_HasSubmittedLocalInputForCurrentFrame = false;
             m_IsRunning = false;
+            m_IsReplayMode = false;
+            m_IsReplayFinished = false;
+            m_ReplayRecorder = null;
+            m_ReplayPlayer = null;
             m_PlayerStates = null;
             m_PreviousRenderPlayerStates = null;
             m_CurrentRenderPlayerStates = null;
@@ -126,6 +163,9 @@ namespace _Code {
             m_TickAccumulator = 0f;
             m_HasSubmittedLocalInputForCurrentFrame = false;
             m_IsRunning = false;
+            m_IsReplayMode = false;
+            m_IsReplayFinished = false;
+            m_ReplayPlayer = null;
             m_PlayerStates = new PlayerState[MaxPlayerCount];
             m_PreviousRenderPlayerStates = new PlayerState[MaxPlayerCount];
             m_CurrentRenderPlayerStates = new PlayerState[MaxPlayerCount];
@@ -151,6 +191,15 @@ namespace _Code {
                 MaxPlayerCount,
                 maxRollbackFrames,
                 inputDelayFrames);
+            m_Session.ConfirmedFrame += OnConfirmedFrame;
+
+            m_ReplayRecorder = new ReplayRecorder(new ReplayHeader {
+                FormatVersion = ReplayHeader.CurrentFormatVersion,
+                LogicVersion = ReplayLogicVersion,
+                TickRate = Mathf.RoundToInt(1f / TickRate),
+                PlayerCount = MaxPlayerCount,
+                InitialStates = (PlayerState[])m_PlayerStates.Clone(),
+            });
         }
 
         private void AddPlayer(GgpoPlayerType playerType) {
@@ -178,9 +227,98 @@ namespace _Code {
             if (m_Session == null)
                 return;
 
+            m_Session.ConfirmedFrame -= OnConfirmedFrame;
             m_Session.Dispose();
             m_Session = null;
             m_Transport = null;
+        }
+
+        /// <summary>
+        /// 将当前已确认的对局片段保存为可播放回放。
+        /// 远程对局若仍有预测帧，需要等待远端输入确认后再保存。
+        /// </summary>
+        public bool TrySaveReplay(string path, out string message) {
+            message = null;
+            if (m_IsReplayMode) {
+                message = "回放播放中不能再次导出回放。";
+                return false;
+            }
+
+            if (m_Session == null || m_ReplayRecorder == null) {
+                message = "当前没有可导出的对局。";
+                return false;
+            }
+
+            var finalFrame = m_GameFrame - 1;
+            if (finalFrame < 0) {
+                message = "对局尚未推进任何逻辑帧。";
+                return false;
+            }
+
+            if (m_Session.LastConfirmedFrame < finalFrame) {
+                message =
+                    $"仍有未确认输入：已确认到 {m_Session.LastConfirmedFrame} 帧，" +
+                    $"当前模拟到 {finalFrame} 帧。请等待网络追平后再保存。";
+                return false;
+            }
+
+            if (m_ReplayRecorder.LastRecordedFrame < finalFrame) {
+                message = "确认帧记录尚未完成，请稍后再试。";
+                return false;
+            }
+
+            try {
+                m_ReplayRecorder.RecordCheckpoint(finalFrame, CalculateChecksum());
+                var replay = m_ReplayRecorder.CreateReplay(finalFrame, true);
+                ReplaySerializer.Save(path, replay);
+                message = $"回放已保存：{path}";
+                return true;
+            }
+            catch (Exception exception) {
+                message = $"保存回放失败：{exception.Message}";
+                Debug.LogException(exception);
+                return false;
+            }
+        }
+
+        public bool TryStartReplay(string path, out string message) {
+            message = null;
+            try {
+                var replay = ReplaySerializer.Load(path);
+                if (replay.Header.LogicVersion != ReplayLogicVersion) {
+                    message =
+                        $"回放逻辑版本不匹配。文件：{replay.Header.LogicVersion}，" +
+                        $"当前：{ReplayLogicVersion}";
+                    return false;
+                }
+
+                if (replay.Header.TickRate != Mathf.RoundToInt(1f / TickRate) ||
+                    replay.Header.PlayerCount != MaxPlayerCount) {
+                    message = "回放的帧率或玩家数与当前游戏不兼容。";
+                    return false;
+                }
+
+                ResetSession();
+                m_ReplayPlayer = new ReplayPlayer(replay);
+                m_PlayerStates = m_ReplayPlayer.PlayerStates;
+                m_PreviousRenderPlayerStates = new PlayerState[MaxPlayerCount];
+                m_CurrentRenderPlayerStates = new PlayerState[MaxPlayerCount];
+                Array.Copy(m_PlayerStates, m_PreviousRenderPlayerStates, MaxPlayerCount);
+                Array.Copy(m_PlayerStates, m_CurrentRenderPlayerStates, MaxPlayerCount);
+                StorePresentationState(0);
+                m_IsReplayMode = true;
+                m_IsReplayFinished = m_ReplayPlayer.IsFinished;
+                m_IsRunning = true;
+                m_TickAccumulator = 0f;
+                message = $"开始播放回放：共 {replay.FinalFrame + 1} 帧。";
+                Debug.Log(message);
+                return true;
+            }
+            catch (Exception exception) {
+                message = $"加载回放失败：{exception.Message}";
+                Debug.LogException(exception);
+                return false;
+            }
         }
 
         public bool TryGetRenderPlayerState(
@@ -205,7 +343,8 @@ namespace _Code {
         }
 
         public bool IsLocalPlayer(int playerIndex) {
-            return m_IsRunning && m_LocalPlayerIndices.Contains(playerIndex);
+            return m_IsRunning &&
+                   (m_IsReplayMode || m_LocalPlayerIndices.Contains(playerIndex));
         }
 
         public bool TryGetConfirmedPlayerState(
@@ -254,6 +393,11 @@ namespace _Code {
         }
 
         private void Tick() {
+            if (m_IsReplayMode) {
+                TickReplay();
+                return;
+            }
+
             SubmitLocalInputsOnce();
 
             m_Session.Idle(0);
@@ -263,6 +407,39 @@ namespace _Code {
 
             m_Session.AdvanceFrame();
             m_HasSubmittedLocalInputForCurrentFrame = false;
+        }
+
+        private void TickReplay() {
+            if (m_ReplayPlayer == null || m_ReplayPlayer.IsFinished) {
+                m_IsReplayFinished = true;
+                return;
+            }
+
+            Array.Copy(
+                m_PlayerStates,
+                m_PreviousRenderPlayerStates,
+                MaxPlayerCount);
+
+            string error;
+            if (!m_ReplayPlayer.TryAdvanceOneFrame(out error)) {
+                m_IsReplayFinished = true;
+                if (!string.IsNullOrEmpty(error))
+                    Debug.LogError(error);
+                return;
+            }
+
+            Array.Copy(
+                m_PlayerStates,
+                m_CurrentRenderPlayerStates,
+                MaxPlayerCount);
+            m_GameFrame = m_ReplayPlayer.CurrentFrame;
+            StorePresentationState(m_GameFrame);
+            PrunePresentationStateHistory();
+
+            if (m_ReplayPlayer.IsFinished) {
+                m_IsReplayFinished = true;
+                Debug.Log("Replay playback completed.");
+            }
         }
 
         private void SubmitLocalInputsOnce() {
@@ -324,6 +501,17 @@ namespace _Code {
                     $"P0=({m_PlayerStates[0].X},{m_PlayerStates[0].AttackCount}), " +
                     $"P1=({m_PlayerStates[1].X},{m_PlayerStates[1].AttackCount})");
             }
+        }
+
+        private void OnConfirmedFrame(int frame, FighterInput[] inputs) {
+            if (m_ReplayRecorder == null)
+                return;
+
+            m_ReplayRecorder.RecordConfirmedFrame(frame, inputs);
+
+            int checksum;
+            if (frame % 60 == 0 && m_FrameChecksums.TryGetValue(frame, out checksum))
+                m_ReplayRecorder.RecordCheckpoint(frame, checksum);
         }
 
         private GgpoSavedState SaveGameState(int frame) {
@@ -434,6 +622,5 @@ namespace _Code {
                 return true;
             }
         }
-
     }
 }
