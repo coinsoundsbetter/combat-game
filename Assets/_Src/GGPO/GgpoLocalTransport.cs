@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace _Code.GGPO {
+namespace _Src.GGPO {
     /// <summary>
     /// 本地传输层,支持模拟延迟
     /// </summary>

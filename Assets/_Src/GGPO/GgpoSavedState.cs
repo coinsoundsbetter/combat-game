@@ -1,6 +1,6 @@
 using System;
 
-namespace _Code.GGPO {
+namespace _Src.GGPO {
     public sealed class GgpoSavedState {
         public byte[] Buffer;
 

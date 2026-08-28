@@ -1,6 +1,6 @@
 using System.Collections.Generic;
 
-namespace _Code.GGPO {
+namespace _Src.GGPO {
     
     public sealed class GgpoInputQueue<TInput> {
         public readonly Dictionary<int, TInput> Inputs = new Dictionary<int, TInput>();

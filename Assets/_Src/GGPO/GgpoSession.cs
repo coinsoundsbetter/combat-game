@@ -1,8 +1,7 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 
-namespace _Code.GGPO
+namespace _Src.GGPO
 {
     public class GgpoSession<TInput> : IDisposable
     {

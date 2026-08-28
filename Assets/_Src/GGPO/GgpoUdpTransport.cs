@@ -4,7 +4,7 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 
-namespace _Code.GGPO {
+namespace _Src.GGPO {
     /// <summary>
     /// 双实例原型使用的 UDP 输入传输层。
     /// 每次发送都会附带最近输入，以缓解少量 UDP 丢包。

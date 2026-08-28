@@ -1,6 +1,6 @@
 using System;
 
-namespace _Code.GGPO {
+namespace _Src.GGPO {
     public sealed class GgpoCallback<TInput> {
         public Action OnSessionStarted;
         public Func<int, GgpoSavedState> SaveGameState;

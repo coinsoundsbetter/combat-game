@@ -1,4 +1,4 @@
-namespace _Code.GGPO
+namespace _Src.GGPO
 {
     public enum GgpoSessionState
     {
