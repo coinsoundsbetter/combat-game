@@ -1,6 +1,8 @@
+/*
 using System;
 using System.IO;
 using _Code.Simulation;
+using _Src.Test;
 
 namespace _Code.Replay {
     /// <summary>
@@ -30,7 +32,7 @@ namespace _Code.Replay {
                 writer.Write(replay.Header.PlayerCount);
 
                 for (var i = 0; i < replay.Header.PlayerCount; i++) {
-                    writer.Write(replay.Header.InitialStates[i].X);
+                    writer.Write(replay.Header.InitialStates[i].PosX);
                     writer.Write(replay.Header.InitialStates[i].AttackCount);
                 }
 
@@ -74,9 +76,9 @@ namespace _Code.Replay {
                 if (header.PlayerCount <= 0 || header.PlayerCount > MaxPlayerCount)
                     throw new InvalidDataException("Invalid replay player count.");
 
-                header.InitialStates = new PlayerState[header.PlayerCount];
+                header.InitialStates = new FighterState[header.PlayerCount];
                 for (var i = 0; i < header.PlayerCount; i++) {
-                    header.InitialStates[i].X = reader.ReadInt32();
+                    header.InitialStates[i].PosX = reader.ReadInt32();
                     header.InitialStates[i].AttackCount = reader.ReadInt32();
                 }
 
@@ -170,3 +172,4 @@ namespace _Code.Replay {
         }
     }
 }
+*/

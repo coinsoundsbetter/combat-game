@@ -3,6 +3,20 @@ using System.Collections.Generic;
 
 namespace _Src.GGPO
 {
+    public struct GgpoRemoteInputDiagnostic<TInput>
+    {
+        public int PlayerIndex;
+        public int LocalFrame;
+        public int InputFrame;
+        public int LatenessFrames;
+        public int LastConfirmedFrame;
+        public bool HasSimulated;
+        public bool WasPredicted;
+        public bool PredictionMismatch;
+        public TInput UsedInput;
+        public TInput ActualInput;
+    }
+
     public class GgpoSession<TInput> : IDisposable
     {
         private readonly GgpoCallback<TInput> m_Callback;
@@ -22,12 +36,21 @@ namespace _Src.GGPO
         private int m_PredictedRemoteInputCount;
         private int m_RollbackCount;
         private int m_LastPublishedConfirmedFrame = -1;
+        
+        public bool IsRollingBack => m_IsRollingBack;
 
         /// <summary>
         /// 当一帧的所有远端输入已连续确认、且该帧已经完成模拟时触发。
         /// 传入的输入不会再因回滚而变化，可安全写入回放或战报。
         /// </summary>
         public event Action<int, TInput[]> ConfirmedFrame;
+        public event Action<int> RollbackStarted;
+        public event Action<int> RollbackCompleted;
+        public event Action<GgpoRemoteInputDiagnostic<TInput>> RemoteInputObserved;
+
+        public int LastRollbackStartFrame { get; private set; } = -1;
+        public int LastRollbackEndFrame { get; private set; } = -1;
+        public int LastRollbackDepth { get; private set; }
 
         public int CurrentFrame {
             get { return m_CurrentFrame; }
@@ -286,6 +309,8 @@ namespace _Src.GGPO
                 throw new InvalidOperationException("非远端玩家尝试接收远端输入");
             }
 
+            var isFirstReceipt = !queue.Inputs.ContainsKey(frame);
+            var wasPredicted = queue.PredictedInputs.ContainsKey(frame);
             TInput usedInput = default(TInput);
             bool hasSimulated = frame < m_CurrentFrame &&
                                 queue.UsedInputs.TryGetValue(frame, out usedInput);
@@ -298,7 +323,9 @@ namespace _Src.GGPO
             }
 
             //这个输入已经被我们的预测模拟过了,发现不一致,需要回滚重放
-            if (hasSimulated && !EqualityComparer<TInput>.Default.Equals(input, usedInput))
+            var predictionMismatch = hasSimulated &&
+                                     !EqualityComparer<TInput>.Default.Equals(input, usedInput);
+            if (predictionMismatch)
             {
                 // 确认回滚从哪里开始执行_应该从最早发现预测错误的帧号开始
                 if (m_EarliestRollbackFrame < 0 || frame < m_EarliestRollbackFrame)
@@ -313,6 +340,23 @@ namespace _Src.GGPO
                 //否则只要将它从预测输入历史里去掉就可以
                 queue.PredictedInputs.Remove(frame);
             }
+
+            // UDP 包会携带历史输入并重复到达。诊断只发布第一次收到该输入的事件，
+            // 避免日志量和日志开销反过来干扰网络时序。
+            if (isFirstReceipt) {
+                RemoteInputObserved?.Invoke(new GgpoRemoteInputDiagnostic<TInput> {
+                    PlayerIndex = playerIndex,
+                    LocalFrame = m_CurrentFrame,
+                    InputFrame = frame,
+                    LatenessFrames = m_CurrentFrame - frame,
+                    LastConfirmedFrame = LastConfirmedFrame,
+                    HasSimulated = hasSimulated,
+                    WasPredicted = wasPredicted,
+                    PredictionMismatch = predictionMismatch,
+                    UsedInput = usedInput,
+                    ActualInput = input,
+                });
+            }
         }
 
         private void RollbackResimulate()
@@ -325,12 +369,16 @@ namespace _Src.GGPO
 
             var rollbackStartFrame = m_EarliestRollbackFrame;
             var rollbackEndFrame = m_CurrentFrame;
+            LastRollbackStartFrame = rollbackStartFrame;
+            LastRollbackEndFrame = rollbackEndFrame;
+            LastRollbackDepth = rollbackEndFrame - rollbackStartFrame;
             GgpoSavedState snapshot;
             if (!m_Snapshots.TryGetValue(rollbackStartFrame, out snapshot))
             {
                 throw new InvalidOperationException($"缺少历史快照,回滚无法进行,frame:{rollbackStartFrame}");
             }
 
+            RollbackStarted?.Invoke(rollbackEndFrame);
             m_IsRollingBack = true;
             m_HasSynchronizedCurrentFrame = false;
 
@@ -358,6 +406,7 @@ namespace _Src.GGPO
                 }
 
                 m_EarliestRollbackFrame = -1;
+                RollbackCompleted?.Invoke(rollbackEndFrame);
             }
             catch
             {

@@ -239,7 +239,6 @@ GameObject:
   m_Component:
   - component: {fileID: 989563632}
   - component: {fileID: 989563633}
-  - component: {fileID: 989563634}
   m_Layer: 0
   m_Name: Main
   m_TagString: Untagged
@@ -271,25 +270,16 @@ MonoBehaviour:
   m_GameObject: {fileID: 989563631}
   m_Enabled: 1
   m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 4169afea307402346bf000ccfcdad8bf, type: 3}
+  m_Script: {fileID: 11500000, guid: 6a84e30de2ea45d3b86d6ea9bc6c710b, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  maxRollbackFrames: 8
-  inputDelayFrames: 2
-  maxTickPerUpdate: 8
---- !u!114 &989563634
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 989563631}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 2dc9c5830a090354c9af98803965f1c5, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: 
-  gameMain: {fileID: 989563633}
+  config:
+    tickRate: 60
+    inputDelayFrames: 2
+    maxPlayerCount: 2
+    maxRollbackFrames: 8
+    maxTickPerUpdate: 8
+    maxStateHistoryFrames: 64
 --- !u!1 &1042110883
 GameObject:
   m_ObjectHideFlags: 0
@@ -333,19 +323,15 @@ MonoBehaviour:
   m_GameObject: {fileID: 1042110883}
   m_Enabled: 1
   m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 38fd4d513d3d4f59a19f378c6a05e34a, type: 3}
+  m_Script: {fileID: 11500000, guid: 0cf48d57208347e89312907cb6e8e7ac, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  gameMain: {fileID: 989563633}
-  player1View: {fileID: 789052861}
-  player2View: {fileID: 1158208073}
-  demoPrimitive: 3
-  unitsPerLogicX: 0.25
-  playerSpacing: 3
-  verticalPosition: 0.5
-  useConfirmedRemotePresentation: 1
-  remoteDisplayDelayFrames: 2
-  remotePositionSmoothing: 18
+  maxPlayerNum: 2
+  playerViews:
+  - {fileID: 789052861}
+  - {fileID: 1158208073}
+  displayDelayFrames: 2
+  positionSmoothing: 18
 --- !u!1 &1110746980
 GameObject:
   m_ObjectHideFlags: 0

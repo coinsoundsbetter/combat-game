@@ -1,4 +1,6 @@
+/*
 using System;
+using _Src.Test;
 
 namespace _Code.Simulation {
     /// <summary>
@@ -7,7 +9,7 @@ namespace _Code.Simulation {
     /// </summary>
     public static class FighterSimulation {
         public static void SimulateFrame(
-            PlayerState[] playerStates,
+            FighterState[] playerStates,
             FighterInput[] playerInputs) {
             if (playerStates == null)
                 throw new ArgumentNullException(nameof(playerStates));
@@ -22,11 +24,12 @@ namespace _Code.Simulation {
                 ApplyInput(ref playerStates[playerIndex], playerInputs[playerIndex]);
         }
 
-        private static void ApplyInput(ref PlayerState state, FighterInput input) {
-            state.X += input.MoveX;
+        private static void ApplyInput(ref FighterState state, FighterInput input) {
+            state.PosX += input.MoveX;
 
             if (input.Attack)
                 state.AttackCount++;
         }
     }
 }
+*/

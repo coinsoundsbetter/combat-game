@@ -1,5 +1,7 @@
+/*
 using System;
 using _Code.Simulation;
+using _Src.Test;
 
 namespace _Code.Replay {
     /// <summary>
@@ -88,7 +90,7 @@ namespace _Code.Replay {
                 LogicVersion = source.LogicVersion,
                 TickRate = source.TickRate,
                 PlayerCount = source.PlayerCount,
-                InitialStates = (PlayerState[])source.InitialStates.Clone(),
+                InitialStates = (FighterState[])source.InitialStates.Clone(),
             };
         }
 
@@ -99,3 +101,4 @@ namespace _Code.Replay {
         }
     }
 }
+*/

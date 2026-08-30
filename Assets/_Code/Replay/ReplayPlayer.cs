@@ -1,6 +1,8 @@
+/*
 using System;
 using System.Collections.Generic;
 using _Code.Simulation;
+using _Src.Test;
 
 namespace _Code.Replay {
     /// <summary>
@@ -8,7 +10,7 @@ namespace _Code.Replay {
     /// </summary>
     public sealed class ReplayPlayer {
         private readonly MatchReplay m_Replay;
-        private readonly PlayerState[] m_PlayerStates;
+        private readonly FighterState[] m_PlayerStates;
         private readonly Dictionary<int, int> m_Checksums =
             new Dictionary<int, int>();
         private int m_NextFrame;
@@ -18,12 +20,12 @@ namespace _Code.Replay {
                 throw new ArgumentNullException(nameof(replay));
 
             m_Replay = replay;
-            m_PlayerStates = (PlayerState[])replay.Header.InitialStates.Clone();
+            m_PlayerStates = (FighterState[])replay.Header.InitialStates.Clone();
             for (var i = 0; i < replay.Checkpoints.Count; i++)
                 m_Checksums[replay.Checkpoints[i].Frame] = replay.Checkpoints[i].Checksum;
         }
 
-        public PlayerState[] PlayerStates {
+        public FighterState[] PlayerStates {
             get { return m_PlayerStates; }
         }
 
@@ -68,3 +70,4 @@ namespace _Code.Replay {
         }
     }
 }
+*/

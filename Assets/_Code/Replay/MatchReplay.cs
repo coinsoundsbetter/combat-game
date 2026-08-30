@@ -1,6 +1,8 @@
+/*
 using System;
 using System.Collections.Generic;
 using _Code.Simulation;
+using _Src.Test;
 
 namespace _Code.Replay {
     /// <summary>
@@ -23,7 +25,7 @@ namespace _Code.Replay {
         public string LogicVersion;
         public int TickRate;
         public int PlayerCount;
-        public PlayerState[] InitialStates;
+        public FighterState[] InitialStates;
     }
 
     [Serializable]
@@ -39,14 +41,14 @@ namespace _Code.Replay {
     }
 
     public static class ReplayChecksum {
-        public static int Calculate(PlayerState[] playerStates) {
+        public static int Calculate(FighterState[] playerStates) {
             if (playerStates == null)
                 throw new ArgumentNullException(nameof(playerStates));
 
             unchecked {
                 var hash = 17;
                 for (var i = 0; i < playerStates.Length; i++) {
-                    hash = hash * 31 + playerStates[i].X;
+                    hash = hash * 31 + playerStates[i].PosX;
                     hash = hash * 31 + playerStates[i].AttackCount;
                 }
 
@@ -55,3 +57,4 @@ namespace _Code.Replay {
         }
     }
 }
+*/

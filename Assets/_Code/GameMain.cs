@@ -1,9 +1,10 @@
-using System;
+/*using System;
 using System.Collections.Generic;
 using System.IO;
 using _Code.Replay;
 using _Code.Simulation;
 using _Src.GGPO;
+using _Src.Test;
 using UnityEngine;
 using UnityEngine.InputSystem;
 
@@ -33,14 +34,14 @@ namespace _Code {
         private readonly List<int> m_LocalPlayerIndices = new List<int>();
         private readonly List<int> m_RemotePlayerIndices = new List<int>();
 
-        private readonly Dictionary<int, PlayerState[]> m_PresentationStateHistory =
-            new Dictionary<int, PlayerState[]>();
+        private readonly Dictionary<int, FighterState[]> m_PresentationStateHistory =
+            new Dictionary<int, FighterState[]>();
 
         private readonly List<int> m_PresentationFramesToRemove = new List<int>();
 
-        private PlayerState[] m_PlayerStates;
-        private PlayerState[] m_PreviousRenderPlayerStates;
-        private PlayerState[] m_CurrentRenderPlayerStates;
+        private FighterState[] m_PlayerStates;
+        private FighterState[] m_PreviousRenderPlayerStates;
+        private FighterState[] m_CurrentRenderPlayerStates;
         private float m_TickAccumulator;
         private int m_GameFrame;
         private int m_RegisteredPlayerCount;
@@ -166,9 +167,9 @@ namespace _Code {
             m_IsReplayMode = false;
             m_IsReplayFinished = false;
             m_ReplayPlayer = null;
-            m_PlayerStates = new PlayerState[MaxPlayerCount];
-            m_PreviousRenderPlayerStates = new PlayerState[MaxPlayerCount];
-            m_CurrentRenderPlayerStates = new PlayerState[MaxPlayerCount];
+            m_PlayerStates = new FighterState[MaxPlayerCount];
+            m_PreviousRenderPlayerStates = new FighterState[MaxPlayerCount];
+            m_CurrentRenderPlayerStates = new FighterState[MaxPlayerCount];
             m_FrameChecksums.Clear();
             m_PresentationStateHistory.Clear();
             m_PresentationFramesToRemove.Clear();
@@ -198,7 +199,7 @@ namespace _Code {
                 LogicVersion = ReplayLogicVersion,
                 TickRate = Mathf.RoundToInt(1f / TickRate),
                 PlayerCount = MaxPlayerCount,
-                InitialStates = (PlayerState[])m_PlayerStates.Clone(),
+                InitialStates = (FighterState[])m_PlayerStates.Clone(),
             });
         }
 
@@ -301,8 +302,8 @@ namespace _Code {
                 ResetSession();
                 m_ReplayPlayer = new ReplayPlayer(replay);
                 m_PlayerStates = m_ReplayPlayer.PlayerStates;
-                m_PreviousRenderPlayerStates = new PlayerState[MaxPlayerCount];
-                m_CurrentRenderPlayerStates = new PlayerState[MaxPlayerCount];
+                m_PreviousRenderPlayerStates = new FighterState[MaxPlayerCount];
+                m_CurrentRenderPlayerStates = new FighterState[MaxPlayerCount];
                 Array.Copy(m_PlayerStates, m_PreviousRenderPlayerStates, MaxPlayerCount);
                 Array.Copy(m_PlayerStates, m_CurrentRenderPlayerStates, MaxPlayerCount);
                 StorePresentationState(0);
@@ -323,11 +324,11 @@ namespace _Code {
 
         public bool TryGetRenderPlayerState(
             int playerIndex,
-            out PlayerState previousState,
-            out PlayerState currentState,
+            out FighterState previousState,
+            out FighterState currentState,
             out float interpolationAlpha) {
-            previousState = default(PlayerState);
-            currentState = default(PlayerState);
+            previousState = default(FighterState);
+            currentState = default(FighterState);
             interpolationAlpha = 0f;
 
             if (!m_IsRunning ||
@@ -350,8 +351,8 @@ namespace _Code {
         public bool TryGetConfirmedPlayerState(
             int playerIndex,
             int displayDelayFrames,
-            out PlayerState playerState) {
-            playerState = default(PlayerState);
+            out FighterState fighterState) {
+            fighterState = default(FighterState);
             if (!m_IsRunning || m_Session == null ||
                 playerIndex < 0 || playerIndex >= MaxPlayerCount ||
                 displayDelayFrames < 0)
@@ -364,11 +365,11 @@ namespace _Code {
             if (stateFrame < 0)
                 stateFrame = 0;
 
-            PlayerState[] states;
+            FighterState[] states;
             if (!m_PresentationStateHistory.TryGetValue(stateFrame, out states))
                 return false;
 
-            playerState = states[playerIndex];
+            fighterState = states[playerIndex];
             return true;
         }
 
@@ -498,8 +499,8 @@ namespace _Code {
             if (frame % 30 == 0) {
                 Debug.Log(
                     $"Frame={frame}, Checksum={checksum}, " +
-                    $"P0=({m_PlayerStates[0].X},{m_PlayerStates[0].AttackCount}), " +
-                    $"P1=({m_PlayerStates[1].X},{m_PlayerStates[1].AttackCount})");
+                    $"P0=({m_PlayerStates[0].PosX},{m_PlayerStates[0].AttackCount}), " +
+                    $"P1=({m_PlayerStates[1].PosX},{m_PlayerStates[1].AttackCount})");
             }
         }
 
@@ -521,7 +522,7 @@ namespace _Code {
                 writer.Write(m_GameFrame);
 
                 for (var i = 0; i < MaxPlayerCount; i++) {
-                    writer.Write(m_PlayerStates[i].X);
+                    writer.Write(m_PlayerStates[i].PosX);
                     writer.Write(m_PlayerStates[i].AttackCount);
                 }
 
@@ -536,7 +537,7 @@ namespace _Code {
                 m_GameFrame = reader.ReadInt32();
 
                 for (var i = 0; i < MaxPlayerCount; i++) {
-                    m_PlayerStates[i].X = reader.ReadInt32();
+                    m_PlayerStates[i].PosX = reader.ReadInt32();
                     m_PlayerStates[i].AttackCount = reader.ReadInt32();
                 }
 
@@ -551,7 +552,7 @@ namespace _Code {
             unchecked {
                 var hash = 17;
                 for (var i = 0; i < MaxPlayerCount; i++) {
-                    hash = hash * 31 + m_PlayerStates[i].X;
+                    hash = hash * 31 + m_PlayerStates[i].PosX;
                     hash = hash * 31 + m_PlayerStates[i].AttackCount;
                 }
 
@@ -560,7 +561,7 @@ namespace _Code {
         }
 
         private void StorePresentationState(int stateFrame) {
-            var states = new PlayerState[MaxPlayerCount];
+            var states = new FighterState[MaxPlayerCount];
             Array.Copy(m_PlayerStates, states, MaxPlayerCount);
             m_PresentationStateHistory[stateFrame] = states;
         }
@@ -623,4 +624,4 @@ namespace _Code {
             }
         }
     }
-}
+}*/

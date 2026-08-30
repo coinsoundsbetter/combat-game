@@ -1,4 +1,6 @@
+/*
 using _Code.Simulation;
+using _Src.Test;
 using UnityEngine;
 
 namespace _Code.Presentation {
@@ -48,7 +50,7 @@ namespace _Code.Presentation {
 
                 if (gameMain.IsLocalPlayer(playerIndex) ||
                     !useConfirmedRemotePresentation) {
-                    PlayerState currentState;
+                    FighterState currentState;
                     if (!gameMain.TryGetRenderPlayerState(
                             playerIndex,
                             out _,
@@ -58,18 +60,18 @@ namespace _Code.Presentation {
 
                     SetDisplayPosition(
                         playerIndex,
-                        GetWorldPosition(playerIndex, currentState.X));
+                        GetWorldPosition(playerIndex, currentState.PosX));
                     continue;
                 }
 
-                PlayerState confirmedState;
+                FighterState confirmedState;
                 if (!gameMain.TryGetConfirmedPlayerState(
                         playerIndex,
                         remoteDisplayDelayFrames,
                         out confirmedState))
                     continue;
 
-                var targetPosition = GetWorldPosition(playerIndex, confirmedState.X);
+                var targetPosition = GetWorldPosition(playerIndex, confirmedState.PosX);
                 if (!m_HasDisplayPosition[playerIndex]) {
                     SetDisplayPosition(playerIndex, targetPosition);
                     continue;
@@ -141,3 +143,4 @@ namespace _Code.Presentation {
         }
     }
 }
+*/

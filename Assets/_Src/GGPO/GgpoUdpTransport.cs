@@ -9,12 +9,14 @@ namespace _Src.GGPO {
     /// 双实例原型使用的 UDP 输入传输层。
     /// 每次发送都会附带最近输入，以缓解少量 UDP 丢包。
     /// </summary>
-    public sealed class GgpoUdpTransport<TInput> : IGgpoTransport<TInput> {
+    public sealed class GgpoUdpTransport<TInput> : IGgpoTransport<TInput>, IGgpoChecksumTransport {
         private const byte ProtocolVersion = 1;
         private const int HeaderSize = 6;
         private const int EntryHeaderSize = 7;
+        private const int ChecksumPacketSize = 13;
         private const int MaxPacketSize = 1200;
         private const int ResendHistoryCount = 32;
+        private const int ChecksumHistoryCount = 4;
 
         private readonly UdpClient m_Udp;
         private readonly IPEndPoint m_RemoteEndpoint;
@@ -22,9 +24,13 @@ namespace _Src.GGPO {
         private readonly long m_SimulatedReceiveDelayTicks;
         private readonly SortedDictionary<long, InputEntry> m_History =
             new SortedDictionary<long, InputEntry>();
+        private readonly SortedDictionary<int, uint> m_ChecksumHistory =
+            new SortedDictionary<int, uint>();
         private readonly List<PendingPacket> m_PendingPackets =
             new List<PendingPacket>();
         private bool m_Disposed;
+
+        public event Action<int, uint> RemoteChecksumReceived;
 
         public GgpoUdpTransport(
             int localPort,
@@ -92,6 +98,24 @@ namespace _Src.GGPO {
             ReceiveAll();
             DeliverPendingPackets(onRemoteInput);
             SendRecentInputs();
+            SendRecentChecksums();
+        }
+
+        public void QueueChecksum(int stateFrame, uint checksum) {
+            ThrowIfDisposed();
+            if (stateFrame < 0)
+                throw new ArgumentOutOfRangeException(nameof(stateFrame));
+
+            m_ChecksumHistory[stateFrame] = checksum;
+            while (m_ChecksumHistory.Count > ChecksumHistoryCount) {
+                var oldestFrame = 0;
+                foreach (var frame in m_ChecksumHistory.Keys) {
+                    oldestFrame = frame;
+                    break;
+                }
+
+                m_ChecksumHistory.Remove(oldestFrame);
+            }
         }
 
         public void Dispose() {
@@ -100,6 +124,7 @@ namespace _Src.GGPO {
 
             m_Disposed = true;
             m_History.Clear();
+            m_ChecksumHistory.Clear();
             m_PendingPackets.Clear();
             m_Udp.Close();
         }
@@ -178,7 +203,31 @@ namespace _Src.GGPO {
             m_Udp.Send(output, output.Length, m_RemoteEndpoint);
         }
 
+        private void SendRecentChecksums() {
+            foreach (var pair in m_ChecksumHistory) {
+                var packet = new byte[ChecksumPacketSize];
+                packet[0] = (byte)'G';
+                packet[1] = (byte)'G';
+                packet[2] = (byte)'C';
+                packet[3] = (byte)'S';
+                packet[4] = ProtocolVersion;
+                WriteInt32(packet, 5, pair.Key);
+                WriteUInt32(packet, 9, pair.Value);
+                m_Udp.Send(packet, packet.Length, m_RemoteEndpoint);
+            }
+        }
+
         private void DecodePacket(byte[] packet, Action<int, int, TInput> onRemoteInput) {
+            if (packet != null && packet.Length == ChecksumPacketSize &&
+                packet[0] == (byte)'G' && packet[1] == (byte)'G' &&
+                packet[2] == (byte)'C' && packet[3] == (byte)'S' &&
+                packet[4] == ProtocolVersion) {
+                RemoteChecksumReceived?.Invoke(
+                    ReadInt32(packet, 5),
+                    ReadUInt32(packet, 9));
+                return;
+            }
+
             if (packet == null || packet.Length < HeaderSize ||
                 packet[0] != (byte)'G' || packet[1] != (byte)'G' ||
                 packet[2] != (byte)'P' || packet[3] != (byte)'O' ||
@@ -239,6 +288,20 @@ namespace _Src.GGPO {
 
         private static ushort ReadUInt16(byte[] buffer, int offset) {
             return (ushort)(buffer[offset] | (buffer[offset + 1] << 8));
+        }
+
+        private static void WriteUInt32(byte[] buffer, int offset, uint value) {
+            buffer[offset] = (byte)value;
+            buffer[offset + 1] = (byte)(value >> 8);
+            buffer[offset + 2] = (byte)(value >> 16);
+            buffer[offset + 3] = (byte)(value >> 24);
+        }
+
+        private static uint ReadUInt32(byte[] buffer, int offset) {
+            return (uint)(buffer[offset] |
+                          (buffer[offset + 1] << 8) |
+                          (buffer[offset + 2] << 16) |
+                          (buffer[offset + 3] << 24));
         }
 
         private sealed class InputEntry {

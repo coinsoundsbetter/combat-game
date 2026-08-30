@@ -16,4 +16,13 @@ namespace _Src.GGPO {
         /// <param name="onRemoteInput"></param>
         void Pump(Action<int, int, TInput> onRemoteInput);
     }
+
+    /// <summary>
+    /// 可选的确认帧状态校验通道。校验失败只报告分叉，不参与状态修正。
+    /// </summary>
+    public interface IGgpoChecksumTransport {
+        event Action<int, uint> RemoteChecksumReceived;
+
+        void QueueChecksum(int stateFrame, uint checksum);
+    }
 }
