@@ -280,6 +280,7 @@ MonoBehaviour:
     maxRollbackFrames: 8
     maxTickPerUpdate: 8
     maxStateHistoryFrames: 64
+    syncTestRollbackFrames: 0
 --- !u!1 &1042110883
 GameObject:
   m_ObjectHideFlags: 0
@@ -330,8 +331,7 @@ MonoBehaviour:
   playerViews:
   - {fileID: 789052861}
   - {fileID: 1158208073}
-  displayDelayFrames: 2
-  positionSmoothing: 18
+  positionSmoothing: 0
 --- !u!1 &1110746980
 GameObject:
   m_ObjectHideFlags: 0

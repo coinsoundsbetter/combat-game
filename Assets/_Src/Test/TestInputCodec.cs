@@ -1,8 +1,6 @@
-using _Code.Simulation;
 using _Src.GGPO;
-using _Src.Test;
 
-namespace _Src.Input {
+namespace _Src.Test {
     public sealed class TestInputCodec : IGgpoInputSerializer<FighterInput> {
         public byte[] Encode(FighterInput input) {
             return new[] {

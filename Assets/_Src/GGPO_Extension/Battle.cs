@@ -19,12 +19,43 @@ namespace _Src.GGPO_Extension {
             m_Session != null ? m_Session.LastRollbackEndFrame : -1;
         public int LastRollbackDepth =>
             m_Session != null ? m_Session.LastRollbackDepth : 0;
+        public bool IsTimeSyncAvailable =>
+            m_Session != null && m_Session.IsTimeSyncAvailable;
+        public float TimeSyncLocalAdvantage =>
+            m_Session != null ? m_Session.TimeSyncLocalAdvantage : 0f;
+        public float TimeSyncRemoteAdvantage =>
+            m_Session != null ? m_Session.TimeSyncRemoteAdvantage : 0f;
+        public int TimeSyncSampleCount =>
+            m_Session != null ? m_Session.TimeSyncSampleCount : 0;
+        public bool IsSyncTestEnabled =>
+            m_Session != null && m_Session.IsSyncTestEnabled;
+        public int SyncTestCount =>
+            m_Session != null ? m_Session.SyncTestCount : 0;
+        public int LastSyncTestFrame =>
+            m_Session != null ? m_Session.LastSyncTestFrame : -1;
+        public bool IsReliableInputAvailable => m_ReliableInputDiagnostics != null;
+        public int PendingLocalInputCount =>
+            m_ReliableInputDiagnostics != null
+                ? m_ReliableInputDiagnostics.PendingLocalInputCount
+                : 0;
+        public int ReceivedInputAckCount =>
+            m_ReliableInputDiagnostics != null
+                ? m_ReliableInputDiagnostics.ReceivedInputAckCount
+                : 0;
+        public bool IsNetworkReady =>
+            m_ConnectionTransport == null || m_ConnectionTransport.IsSynchronized;
+        public GgpoConnectionState ConnectionState =>
+            m_ConnectionTransport != null
+                ? m_ConnectionTransport.ConnectionState
+                : GgpoConnectionState.Synchronized;
+        public int TimeSyncWaitCount { get; private set; }
         public int RollbackRevision { get; private set; }
         public bool IsChecksumVerificationAvailable => m_ChecksumTransport != null;
         public int LastVerifiedChecksumStateFrame { get; private set; } = -1;
         public int ChecksumMismatchCount { get; private set; }
         public event Action<GgpoRemoteInputDiagnostic<TInput>> RemoteInputObserved;
         public event Action RollbackObserved;
+        public event Action TimeSyncWaitObserved;
         
         public void Initialize(
             CoreSetting rules, 
@@ -41,6 +72,9 @@ namespace _Src.GGPO_Extension {
             m_InputProvider = inputProvider;
             m_Simulator = simulator;
             m_ChecksumTransport = transport as IGgpoChecksumTransport;
+            m_ReliableInputDiagnostics =
+                transport as IGgpoReliableInputDiagnostics;
+            m_ConnectionTransport = transport as IGgpoConnectionTransport;
             m_LocalChecksums = new Dictionary<int, uint>();
             m_RemoteChecksums = new Dictionary<int, uint>();
             m_ComparedChecksumFrames = new HashSet<int>();
@@ -48,6 +82,7 @@ namespace _Src.GGPO_Extension {
             m_LastRollbackPredictedStates = null;
             m_LastRollbackCorrectedStates = null;
             RollbackRevision = 0;
+            TimeSyncWaitCount = 0;
             LastVerifiedChecksumStateFrame = -1;
             ChecksumMismatchCount = 0;
         }
@@ -68,7 +103,8 @@ namespace _Src.GGPO_Extension {
                 m_Transport,
                 m_Setting.maxPlayerCount,
                 m_Setting.maxRollbackFrames,
-                m_Setting.inputDelayFrames);
+                m_Setting.inputDelayFrames,
+                m_Setting.syncTestRollbackFrames);
             m_Session.ConfirmedFrame += OnConfirmedFrame;
             m_Session.RollbackStarted += OnRollbackStarted;
             m_Session.RollbackCompleted += OnRollbackCompleted;
@@ -78,6 +114,7 @@ namespace _Src.GGPO_Extension {
             m_TickAcc = 0;
             m_TickInterval = 1f / m_Setting.tickRate;
             m_CurrentFrame = 0;
+            m_WasNetworkReady = m_ConnectionTransport == null;
             for (var sessionIndex = 0; sessionIndex < m_PlayerRegistration.Length; sessionIndex++) {
                 var registration = m_PlayerRegistration[sessionIndex];
                 if (registration == null) {
@@ -87,6 +124,28 @@ namespace _Src.GGPO_Extension {
                 m_Session.AddPlayer(registration.NetType == NetPlayerType.Local ? 
                     GgpoPlayerType.Local : GgpoPlayerType.Remote);
             }
+
+            if (m_ConnectionTransport != null) {
+                var localPlayerIndex = -1;
+                for (var playerIndex = 0; playerIndex < m_PlayerRegistration.Length; playerIndex++) {
+                    if (m_PlayerRegistration[playerIndex].NetType != NetPlayerType.Local)
+                        continue;
+
+                    if (localPlayerIndex >= 0) {
+                        throw new InvalidOperationException(
+                            "Network sessions require exactly one local player.");
+                    }
+
+                    localPlayerIndex = playerIndex;
+                }
+
+                if (localPlayerIndex < 0)
+                    throw new InvalidOperationException(
+                        "Network sessions require one local player.");
+
+                m_ConnectionTransport.BeginSynchronization(localPlayerIndex);
+            }
+
             StoreState(0);
         }
 
@@ -106,6 +165,7 @@ namespace _Src.GGPO_Extension {
             m_Transport.Dispose();
             m_Session = null;
             m_Transport = null;
+            m_ConnectionTransport = null;
         }
 
         public void Update() {
@@ -113,9 +173,59 @@ namespace _Src.GGPO_Extension {
                 return;
             }
 
+            // 握手完成前只驱动网络，不积累逻辑时间。后启动的一端因此仍从
+            // 状态帧 0 加入，而不会令先启动的一端提前预测若干帧。
+            if (!IsNetworkReady) {
+                m_Session.Idle(0);
+                m_TickAcc = 0f;
+                m_WasNetworkReady = false;
+                // 每次未就绪都恢复完整的开局稳定时间，确保同步后才开始计时。
+                // 上限保护：这段稳定期会冻结逻辑推进（从而本地无法输入），
+                // 即使 Inspector 里手滑填了很大的值，也只短暂生效，不会锁死操作。
+                m_StartGraceRemainingSeconds =
+                    Mathf.Clamp(m_Setting.startGraceSeconds, 0f, 0.25f);
+                return;
+            }
+
+            // 丢弃握手完成这一渲染帧已经经过的时间，从完整 tick 开始战斗。
+            if (!m_WasNetworkReady) {
+                m_WasNetworkReady = true;
+                m_TickAcc = 0f;
+                m_Session.Idle(0);
+                return;
+            }
+
+            // 开局稳定期：双方都已就绪，但先顶住一段时间只收发网络包、不推进逻辑。
+            // 这样对端首批输入落地后，两端几乎同时从状态帧 0 起步，先启动的一端
+            // 不会用默认输入预测后启动的一端，避免其开局移动方向变化时的跳变。
+            if (m_StartGraceRemainingSeconds > 0f) {
+                m_StartGraceRemainingSeconds -= Time.unscaledDeltaTime;
+                m_TickAcc = 0f;
+                m_Session.Idle(0);
+                return;
+            }
+
             m_TickAcc += Time.unscaledDeltaTime;
+
+            // TimeSync 等待期间以及渲染帧率高于逻辑帧率时，网络仍需继续工作。
+            if (m_TickAcc < m_TickInterval) {
+                m_Session.Idle(0);
+                return;
+            }
+
             var tickCount = 0;
             while (m_TickAcc >= m_TickInterval && tickCount < m_Setting.maxTickPerUpdate) {
+                if (m_Session.TryConsumeTimeSyncWait()) {
+                    // 只暂停正常逻辑推进；收包和已经需要的回滚照常执行。
+                    m_Session.Idle(0);
+
+                    // 必须消费这段真实时间，否则下一帧会立刻追赶回来。
+                    m_TickAcc -= m_TickInterval;
+                    TimeSyncWaitCount++;
+                    TimeSyncWaitObserved?.Invoke();
+                    break;
+                }
+
                 TickOnce();
                 m_TickAcc -= m_TickInterval;
                 tickCount++;
@@ -179,6 +289,8 @@ namespace _Src.GGPO_Extension {
         private IGgpoInputProvider<TInput> m_InputProvider;
         private ISimulation<TPlayerState, TInput> m_Simulator;
         private IGgpoChecksumTransport m_ChecksumTransport;
+        private IGgpoReliableInputDiagnostics m_ReliableInputDiagnostics;
+        private IGgpoConnectionTransport m_ConnectionTransport;
         private PlayerRegistration[] m_PlayerRegistration;
         private Dictionary<int, TPlayerState[]> m_StateHistory;
         private List<int> m_StateFramesToRemove;
@@ -192,6 +304,8 @@ namespace _Src.GGPO_Extension {
         private float m_TickInterval;
         private int m_CurrentFrame;
         private bool m_HasSubmittedLocalInputForCurrentFrame;
+        private bool m_WasNetworkReady;
+        private float m_StartGraceRemainingSeconds;
 
         private void TickOnce() {
             //收集本地输入
@@ -292,7 +406,6 @@ namespace _Src.GGPO_Extension {
             m_ComparedChecksumFrames.Add(stateFrame);
             if (localChecksum == remoteChecksum) {
                 LastVerifiedChecksumStateFrame = stateFrame;
-                Debug.Log($"Checksum verified. StateFrame={stateFrame}, Value={localChecksum:X8}");
                 return;
             }
 

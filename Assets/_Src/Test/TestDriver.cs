@@ -1,7 +1,6 @@
 ﻿using System;
 using _Src.GGPO_Extension;
 using _Src.GGPO;
-using _Src.Input;
 using UnityEngine;
 
 namespace _Src.Test {
@@ -26,6 +25,7 @@ namespace _Src.Test {
             if (m_Battle != null) {
                 m_Battle.RemoteInputObserved -= OnRemoteInputObserved;
                 m_Battle.RollbackObserved -= RecordCompletedRollback;
+                m_Battle.TimeSyncWaitObserved -= RecordTimeSyncWait;
             }
             m_Battle?.Stop();
             m_Battle = null;
@@ -73,6 +73,7 @@ namespace _Src.Test {
                     m_SimulateDelayMS = GUILayout.TextField(m_SimulateDelayMS);
 
                     if (m_Battle != null) {
+                        GUILayout.Label($"连接：{GetConnectionStatus(m_Battle.ConnectionState)}");
                         var checksumState = !m_Battle.IsChecksumVerificationAvailable
                             ? "本地对局不校验"
                             : m_Battle.LastVerifiedChecksumStateFrame < 0
@@ -88,6 +89,22 @@ namespace _Src.Test {
                         GUILayout.Label(
                             $"回滚：{m_Battle.RollbackCount}，上次深度：{m_Battle.LastRollbackDepth}，" +
                             $"远端预测累计：{m_Battle.PredictedRemoteInputCount}");
+                        GUILayout.Label(
+                            m_Battle.IsSyncTestEnabled
+                                ? $"SyncTest：通过 {m_Battle.SyncTestCount} 次，" +
+                                  $"最近状态帧 {m_Battle.LastSyncTestFrame}"
+                                : "SyncTest：关闭（syncTestRollbackFrames=0）");
+                        if (m_Battle.IsReliableInputAvailable) {
+                            GUILayout.Label(
+                                $"输入ACK：待确认 {m_Battle.PendingLocalInputCount}，" +
+                                $"已确认 {m_Battle.ReceivedInputAckCount}");
+                        }
+                        if (m_Battle.IsTimeSyncAvailable) {
+                            GUILayout.Label(
+                                $"TimeSync：本机优势 {m_Battle.TimeSyncLocalAdvantage:F2}，" +
+                                $"远端报告 {m_Battle.TimeSyncRemoteAdvantage:F2}，" +
+                                $"等待 {m_Battle.TimeSyncWaitCount}");
+                        }
                     }
 
                     GUILayout.Label("[诊断日志]");
@@ -169,11 +186,14 @@ namespace _Src.Test {
             var tickRate = config != null ? config.tickRate : 0;
             var inputDelay = config != null ? config.inputDelayFrames : 0;
             var maxRollback = config != null ? config.maxRollbackFrames : 0;
+            var syncTestFrames = config != null
+                ? config.syncTestRollbackFrames
+                : 0;
             TestDiagnostics.BeginSession(
                 $"Mode={mode} LocalPort={m_LocalPort} Remote={m_RemoteIp}:{m_RemotePort} " +
                 $"LocalPlayer=P{m_LocalPlayerIndex + 1} SimulatedReceiveDelayMs={simulatedDelayMs} " +
                 $"TickRate={tickRate} InputDelayFrames={inputDelay} " +
-                $"MaxRollbackFrames={maxRollback}");
+                $"MaxRollbackFrames={maxRollback} SyncTestFrames={syncTestFrames}");
             m_NextDiagnosticSummaryTime = Time.unscaledTime;
             m_DiagnosticStatus = "诊断记录中，复现拉回后点击保存。";
         }
@@ -181,7 +201,33 @@ namespace _Src.Test {
         private void AttachDiagnostics() {
             m_Battle.RemoteInputObserved += OnRemoteInputObserved;
             m_Battle.RollbackObserved += RecordCompletedRollback;
+            m_Battle.TimeSyncWaitObserved += RecordTimeSyncWait;
             TestDiagnostics.Record("SESSION", "BattleStarted=1");
+        }
+
+        private static string GetConnectionStatus(GgpoConnectionState state) {
+            switch (state) {
+                case GgpoConnectionState.NotStarted:
+                    return "尚未开始";
+                case GgpoConnectionState.WaitingForPeer:
+                    return "等待对端 READY";
+                case GgpoConnectionState.PlayerIndexConflict:
+                    return "玩家编号冲突（两端不能选择同一玩家）";
+                case GgpoConnectionState.Synchronized:
+                    return "已同步";
+                default:
+                    return state.ToString();
+            }
+        }
+
+        private void RecordTimeSyncWait() {
+            TestDiagnostics.Record(
+                "TIMESYNC",
+                $"Current={m_Battle.CurrentFrame} " +
+                $"LocalAdvantage={m_Battle.TimeSyncLocalAdvantage:F3} " +
+                $"RemoteReported={m_Battle.TimeSyncRemoteAdvantage:F3} " +
+                $"Samples={m_Battle.TimeSyncSampleCount} " +
+                $"WaitTotal={m_Battle.TimeSyncWaitCount}");
         }
 
         private void OnRemoteInputObserved(
@@ -250,6 +296,14 @@ namespace _Src.Test {
                 $"PredictedTotal={m_Battle.PredictedRemoteInputCount} " +
                 $"RollbackTotal={m_Battle.RollbackCount} " +
                 $"LastRollbackDepth={m_Battle.LastRollbackDepth} " +
+                $"TimeSyncLocalAdvantage={m_Battle.TimeSyncLocalAdvantage:F3} " +
+                $"TimeSyncRemoteReported={m_Battle.TimeSyncRemoteAdvantage:F3} " +
+                $"TimeSyncSamples={m_Battle.TimeSyncSampleCount} " +
+                $"TimeSyncWaitTotal={m_Battle.TimeSyncWaitCount} " +
+                $"SyncTestCount={m_Battle.SyncTestCount} " +
+                $"SyncTestFrame={m_Battle.LastSyncTestFrame} " +
+                $"PendingLocalInputs={m_Battle.PendingLocalInputCount} " +
+                $"InputAckTotal={m_Battle.ReceivedInputAckCount} " +
                 $"ChecksumMismatch={m_Battle.ChecksumMismatchCount}");
         }
 
@@ -258,7 +312,6 @@ namespace _Src.Test {
                 var label = $"port{m_LocalPort}_p{m_LocalPlayerIndex + 1}";
                 var path = TestDiagnostics.Save(label);
                 m_DiagnosticStatus = $"已保存：{path}";
-                Debug.Log($"GGPO diagnostic log saved: {path}");
             }
             catch (Exception exception) {
                 m_DiagnosticStatus = $"保存失败：{exception.Message}";

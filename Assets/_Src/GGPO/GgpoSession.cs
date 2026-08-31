@@ -21,11 +21,15 @@ namespace _Src.GGPO
     {
         private readonly GgpoCallback<TInput> m_Callback;
         private readonly IGgpoTransport<TInput> m_Transport;
+        private readonly IGgpoTimeSyncTransport m_TimeSyncTransport;
+        private readonly GgpoTimeSync m_TimeSync;
         private readonly int m_MaxRollbackFrames;
+        private readonly int m_SyncTestRollbackFrames;
         private readonly GgpoInputQueue<TInput>[] m_PlayerQueues;
         private readonly Dictionary<int, GgpoSavedState> m_Snapshots = new Dictionary<int, GgpoSavedState>();
         private readonly List<int> m_FramesToRemove = new List<int>();
         private TInput[] m_SynchronizedInputs;
+        private TInput[] m_SyncTestInputs;
         private int m_CurrentFrame;
         private int m_EarliestRollbackFrame = -1;
         private bool m_HasSynchronizedCurrentFrame;
@@ -51,6 +55,9 @@ namespace _Src.GGPO
         public int LastRollbackStartFrame { get; private set; } = -1;
         public int LastRollbackEndFrame { get; private set; } = -1;
         public int LastRollbackDepth { get; private set; }
+        public bool IsSyncTestEnabled => m_SyncTestRollbackFrames > 0;
+        public int SyncTestCount { get; private set; }
+        public int LastSyncTestFrame { get; private set; } = -1;
 
         public int CurrentFrame {
             get { return m_CurrentFrame; }
@@ -63,6 +70,11 @@ namespace _Src.GGPO
         public int RollbackCount {
             get { return m_RollbackCount; }
         }
+
+        public float TimeSyncLocalAdvantage => m_TimeSync.LocalAdvantage;
+        public float TimeSyncRemoteAdvantage => m_TimeSync.RemoteAdvantage;
+        public int TimeSyncSampleCount => m_TimeSync.SampleCount;
+        public bool IsTimeSyncAvailable => m_TimeSyncTransport != null;
 
         /// <summary>
         /// 双方输入均已连续确认的最新逻辑帧。
@@ -91,14 +103,30 @@ namespace _Src.GGPO
             IGgpoTransport<TInput> transport,
             int maxPlayerCount,
             int maxRollbackFrames,
-            int inputDelayFrames)
+            int inputDelayFrames,
+            int syncTestRollbackFrames = 0)
         {
+            if (syncTestRollbackFrames < 0 ||
+                syncTestRollbackFrames > maxRollbackFrames) {
+                throw new ArgumentOutOfRangeException(
+                    nameof(syncTestRollbackFrames),
+                    "Sync test distance must be inside the rollback window.");
+            }
+
             m_Callback = callback;
             m_Transport = transport;
+            m_TimeSync = new GgpoTimeSync();
+            m_TimeSyncTransport = transport as IGgpoTimeSyncTransport;
+            if (m_TimeSyncTransport != null) {
+                m_TimeSyncTransport.TimeSyncSampleReceived +=
+                    OnTimeSyncSampleReceived;
+            }
             m_InputDelayFrames = inputDelayFrames;
             m_MaxRollbackFrames = maxRollbackFrames;
+            m_SyncTestRollbackFrames = syncTestRollbackFrames;
             m_PlayerQueues = new GgpoInputQueue<TInput>[maxPlayerCount];
             m_SynchronizedInputs = new TInput[maxPlayerCount];
+            m_SyncTestInputs = new TInput[maxPlayerCount];
             m_Callback.OnSessionStarted?.Invoke();
         }
 
@@ -125,14 +153,31 @@ namespace _Src.GGPO
 
             m_Snapshots.Clear();
             m_FramesToRemove.Clear();
+            if (m_TimeSyncTransport != null) {
+                m_TimeSyncTransport.TimeSyncSampleReceived -=
+                    OnTimeSyncSampleReceived;
+            }
             m_Transport.Dispose();
         }
 
         public void Idle(int timeoutMilliseconds)
         {
+            if (m_TimeSyncTransport != null) {
+                m_TimeSyncTransport.SetLocalTimeSyncState(
+                    m_CurrentFrame,
+                    m_TimeSync.LocalAdvantage);
+            }
             m_Transport.Pump(ReceiveRemoteInput);
             RollbackResimulate();
             PublishNewConfirmedFrames();
+        }
+
+        public bool TryConsumeTimeSyncWait()
+        {
+            if (m_IsRollingBack || m_TimeSyncTransport == null)
+                return false;
+
+            return m_TimeSync.TryConsumeWait();
         }
 
         public bool TrySynqhronizeInputs(TInput[] inputs)
@@ -173,6 +218,7 @@ namespace _Src.GGPO
             m_HasSynchronizedCurrentFrame = false;
 
             SaveSnapshot(m_CurrentFrame);
+            RunSyncTestIfNeeded();
             PublishNewConfirmedFrames();
         }
 
@@ -359,6 +405,11 @@ namespace _Src.GGPO
             }
         }
 
+        private void OnTimeSyncSampleReceived(GgpoTimeSyncSample sample)
+        {
+            m_TimeSync.AddSample(m_CurrentFrame, sample);
+        }
+
         private void RollbackResimulate()
         {
             //无需回滚
@@ -518,10 +569,10 @@ namespace _Src.GGPO
         {
             for(int i = 0; i < m_PlayerQueues.Length; i++)
             {
-                m_PlayerQueues[i].UsedInputs[m_CurrentFrame] = m_SynchronizedInputs[i];
+                m_PlayerQueues[i].UsedInputs[frame] = inputs[i];
             }
 
-            m_Callback.AdvanceFrame(m_CurrentFrame, m_SynchronizedInputs);
+            m_Callback.AdvanceFrame(frame, inputs);
         }
 
         private void SynchronizeInputs(int frame, TInput[] inputs)
@@ -529,8 +580,87 @@ namespace _Src.GGPO
             for(int i = 0; i < m_PlayerQueues.Length; i++)
             {
                 var queue = m_PlayerQueues[i];
-                m_SynchronizedInputs[i] = GetInput(queue, m_CurrentFrame);
+                inputs[i] = GetInput(queue, frame);
             }
+        }
+
+        /// <summary>
+        /// 开发期确定性验证：加载若干帧前的快照，使用当时真正采用过的输入
+        /// 重演到当前帧，并要求最终序列化状态逐字节相同。
+        /// </summary>
+        private void RunSyncTestIfNeeded()
+        {
+            if (m_SyncTestRollbackFrames <= 0 ||
+                m_CurrentFrame < m_SyncTestRollbackFrames)
+                return;
+
+            var targetFrame = m_CurrentFrame;
+            var startFrame = targetFrame - m_SyncTestRollbackFrames;
+            if (!m_Snapshots.TryGetValue(startFrame, out var startState) ||
+                !m_Snapshots.TryGetValue(targetFrame, out var expectedState)) {
+                throw new InvalidOperationException(
+                    $"SyncTest snapshot is missing. Start={startFrame}, Target={targetFrame}");
+            }
+
+            m_IsRollingBack = true;
+            try
+            {
+                m_Callback.LoadGameState(startState.Buffer);
+
+                for (var frame = startFrame; frame < targetFrame; frame++)
+                {
+                    for (var playerIndex = 0;
+                         playerIndex < m_PlayerQueues.Length;
+                         playerIndex++)
+                    {
+                        if (!m_PlayerQueues[playerIndex].UsedInputs.TryGetValue(
+                                frame,
+                                out m_SyncTestInputs[playerIndex])) {
+                            throw new InvalidOperationException(
+                                $"SyncTest input is missing. Player={playerIndex}, Frame={frame}");
+                        }
+                    }
+
+                    m_Callback.AdvanceFrame(frame, m_SyncTestInputs);
+                }
+
+                var actualState = m_Callback.SaveGameState(targetFrame);
+                var mismatchOffset = FindFirstMismatch(
+                    expectedState.Buffer,
+                    actualState.Buffer);
+                if (mismatchOffset >= 0) {
+                    throw new InvalidOperationException(
+                        $"SyncTest failed. Start={startFrame}, Target={targetFrame}, " +
+                        $"FirstMismatchByte={mismatchOffset}, " +
+                        $"ExpectedLength={expectedState.Buffer.Length}, " +
+                        $"ActualLength={actualState.Buffer.Length}");
+                }
+
+                SyncTestCount++;
+                LastSyncTestFrame = targetFrame;
+            }
+            finally
+            {
+                // 即使测试失败，也尽量恢复首次正常模拟得到的权威状态，
+                // 让异常现场和诊断日志保持在失败帧。
+                try {
+                    m_Callback.LoadGameState(expectedState.Buffer);
+                }
+                finally {
+                    m_IsRollingBack = false;
+                }
+            }
+        }
+
+        private static int FindFirstMismatch(byte[] expected, byte[] actual)
+        {
+            var commonLength = Math.Min(expected.Length, actual.Length);
+            for (var i = 0; i < commonLength; i++) {
+                if (expected[i] != actual[i])
+                    return i;
+            }
+
+            return expected.Length == actual.Length ? -1 : commonLength;
         }
 
         private void PublishNewConfirmedFrames()
